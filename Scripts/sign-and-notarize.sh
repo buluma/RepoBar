@@ -31,7 +31,6 @@ if [[ $(printf "%s\n" "$key_lines" | wc -l) -ne 1 ]]; then
   exit 1
 fi
 
-    local p8_key_file
     p8_key_file=$(mktemp /tmp/repobar-api-key.XXXXXX.p8)
     echo "$APP_STORE_CONNECT_API_KEY_P8" | sed 's/\\n/\n/g' > "$p8_key_file"
     trap 'rm -f "$p8_key_file" /tmp/RepoBarNotarize.zip' EXIT

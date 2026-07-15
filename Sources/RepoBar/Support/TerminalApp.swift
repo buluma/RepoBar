@@ -25,7 +25,9 @@ enum TerminalApp: String, CaseIterable {
         }
     }
 
-    var displayName: String { self.rawValue }
+    var displayName: String {
+        self.rawValue
+    }
 
     private static let logger = RepoBarLogging.logger("terminal")
 
@@ -38,6 +40,7 @@ enum TerminalApp: String, CaseIterable {
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: self.bundleIdentifier) else {
             return nil
         }
+
         return NSWorkspace.shared.icon(forFile: appURL.path)
     }
 
@@ -54,6 +57,7 @@ enum TerminalApp: String, CaseIterable {
         guard let rawValue, let match = TerminalApp(rawValue: rawValue), match.isInstalled else {
             return TerminalApp.defaultPreferred
         }
+
         return match
     }
 
@@ -73,6 +77,7 @@ enum TerminalApp: String, CaseIterable {
             }
             return
         }
+
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = true
         SecurityScopedBookmark.withAccess(to: url, rootBookmarkData: rootBookmarkData) {

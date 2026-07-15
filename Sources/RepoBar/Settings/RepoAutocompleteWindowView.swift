@@ -37,8 +37,13 @@ struct RepoAutocompleteWindowView: NSViewRepresentable {
     @MainActor
     class Coordinator: NSObject {
         private final class DropdownWindow: NSPanel {
-            override var canBecomeKey: Bool { false }
-            override var canBecomeMain: Bool { false }
+            override var canBecomeKey: Bool {
+                false
+            }
+
+            override var canBecomeMain: Bool {
+                false
+            }
         }
 
         private var dropdownWindow: NSWindow?
@@ -265,13 +270,22 @@ private struct RepoAutocompleteRow: View {
                             if self.repo.isFork { Badge(text: "Fork") }
                             if self.repo.isArchived { Badge(text: "Archived") }
                             if self.repo.discussionsEnabled == true { Badge(text: "Discussions") }
+                            if let lang = self.repo.language, !lang.isEmpty { Badge(text: lang) }
                         }
                     }
 
-                    Text(self.subtitleText)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if let description = self.repo.description, !description.isEmpty {
+                        Text(description)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    } else {
+                        Text(self.subtitleText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer()

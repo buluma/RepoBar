@@ -16,9 +16,17 @@ struct RepoSubmenuRowIdentifier: Hashable {
 struct RepoSubmenuBuilder {
     let menuBuilder: StatusBarMenuBuilder
 
-    private var appState: AppState { self.menuBuilder.appState }
-    private var target: StatusBarMenuManager { self.menuBuilder.target }
-    private var signposter: OSSignposter { self.menuBuilder.signposter }
+    private var appState: AppState {
+        self.menuBuilder.appState
+    }
+
+    private var target: StatusBarMenuManager {
+        self.menuBuilder.target
+    }
+
+    private var signposter: OSSignposter {
+        self.menuBuilder.signposter
+    }
 
     func makeRepoSubmenu(for repo: RepositoryDisplayModel, isPinned: Bool) -> NSMenu {
         let signpost = self.signposter.beginInterval("makeRepoSubmenu")
@@ -58,6 +66,7 @@ struct RepoSubmenuBuilder {
         var lastGroup: RepoSubmenuItemGroup?
         for block in blocks {
             guard block.items.isEmpty == false else { continue }
+
             if let lastGroup, lastGroup != block.group, items.isEmpty == false {
                 items.append(.separator())
             }
@@ -87,6 +96,7 @@ struct RepoSubmenuBuilder {
             return [self.menuBuilder.viewItem(for: openRow, enabled: true, highlightable: true)]
         case .openInFinder:
             guard let local else { return [] }
+
             return [self.menuBuilder.actionItem(
                 title: "Open in Finder",
                 action: #selector(StatusBarMenuManager.openLocalFinder(_:)),
@@ -95,6 +105,7 @@ struct RepoSubmenuBuilder {
             )]
         case .openInTerminal:
             guard let local else { return [] }
+
             return [self.menuBuilder.actionItem(
                 title: "Open in Terminal",
                 action: #selector(StatusBarMenuManager.openLocalTerminal(_:)),
@@ -103,6 +114,7 @@ struct RepoSubmenuBuilder {
             )]
         case .checkoutRepo:
             guard local == nil else { return [] }
+
             return [self.menuBuilder.actionItem(
                 title: "Checkout Repo",
                 action: #selector(self.target.checkoutRepoFromMenu),
@@ -111,6 +123,7 @@ struct RepoSubmenuBuilder {
             )]
         case .localState:
             guard let local else { return [] }
+
             let stateView = LocalRepoStateMenuView(
                 status: local,
                 onSync: { [weak target] in target?.syncLocalRepo(local) },
@@ -120,6 +133,7 @@ struct RepoSubmenuBuilder {
             return [self.menuBuilder.viewItem(for: stateView, enabled: true)]
         case .worktrees:
             guard let local else { return [] }
+
             return [self.localWorktreesSubmenuItem(for: local, fullName: repo.title)]
         case .issues:
             return [self.recentListSubmenuItem(RecentListConfig(
@@ -129,7 +143,7 @@ struct RepoSubmenuBuilder {
                 kind: .issues,
                 openTitle: "Open Issues",
                 openAction: #selector(self.target.openIssues),
-                badgeText: repo.issues > 0 ? StatValueFormatter.compact(repo.issues) : nil
+                badgeText: StatValueFormatter.compact(repo.issues)
             ))]
         case .pulls:
             return [self.recentListSubmenuItem(RecentListConfig(
@@ -139,22 +153,16 @@ struct RepoSubmenuBuilder {
                 kind: .pullRequests,
                 openTitle: "Open Pull Requests",
                 openAction: #selector(self.target.openPulls),
-                badgeText: repo.pulls > 0 ? StatValueFormatter.compact(repo.pulls) : nil
+                badgeText: StatValueFormatter.compact(repo.pulls)
             ))]
         case .releases:
-            let cachedReleaseCount = self.target.cachedRecentListCount(fullName: repo.title, kind: .releases)
             let latestReleaseName = repo.source.latestRelease?.name
-            let badgeCountText = cachedReleaseCount.flatMap { $0 > 0 ? String($0) : nil }
             let badgeAccessibilityLabel: String? = {
                 let name = latestReleaseName.flatMap { $0.isEmpty == false ? $0 : nil }
-                switch (name, badgeCountText) {
-                case let (name?, count?):
-                    return "Latest release \(name). \(count) releases."
-                case let (name?, nil):
+                switch name {
+                case let name?:
                     return "Latest release \(name)."
-                case let (nil, count?):
-                    return "Releases \(count)."
-                case (nil, nil):
+                case nil:
                     return nil
                 }
             }()
@@ -166,7 +174,7 @@ struct RepoSubmenuBuilder {
                 openTitle: "Open Releases",
                 openAction: #selector(self.target.openReleases),
                 badgePrefixText: latestReleaseName,
-                badgeText: badgeCountText,
+                badgeText: nil,
                 badgeAccessibilityLabel: badgeAccessibilityLabel
             ))]
         case .changelog:
@@ -194,7 +202,6 @@ struct RepoSubmenuBuilder {
             if repo.source.discussionsEnabled == false {
                 return []
             }
-            let cachedDiscussionCount = self.target.cachedRecentListCount(fullName: repo.title, kind: .discussions)
             return [self.recentListSubmenuItem(RecentListConfig(
                 title: "Discussions",
                 systemImage: "bubble.left.and.bubble.right",
@@ -202,10 +209,9 @@ struct RepoSubmenuBuilder {
                 kind: .discussions,
                 openTitle: "Open Discussions",
                 openAction: #selector(self.target.openDiscussions),
-                badgeText: cachedDiscussionCount.flatMap { $0 > 0 ? String($0) : nil }
+                badgeText: nil
             ))]
         case .tags:
-            let cachedTagCount = self.target.cachedRecentListCount(fullName: repo.title, kind: .tags)
             return [self.recentListSubmenuItem(RecentListConfig(
                 title: "Tags",
                 systemImage: "tag",
@@ -213,13 +219,11 @@ struct RepoSubmenuBuilder {
                 kind: .tags,
                 openTitle: "Open Tags",
                 openAction: #selector(self.target.openTags),
-                badgeText: cachedTagCount.flatMap { $0 > 0 ? String($0) : nil }
+                badgeText: nil
             ))]
         case .branches:
-            let cachedBranchCount = self.target.cachedRecentListCount(fullName: repo.title, kind: .branches)
-            let branchBadge = cachedBranchCount.flatMap { $0 > 0 ? String($0) : nil }
             if let local {
-                return [self.branchesSubmenuItem(for: local, fullName: repo.title, badgeText: branchBadge)]
+                return [self.branchesSubmenuItem(for: local, fullName: repo.title, badgeText: nil)]
             }
             return [self.recentListSubmenuItem(RecentListConfig(
                 title: "Branches",
@@ -228,10 +232,9 @@ struct RepoSubmenuBuilder {
                 kind: .branches,
                 openTitle: "Open Branches",
                 openAction: #selector(self.target.openBranches),
-                badgeText: branchBadge
+                badgeText: nil
             ))]
         case .contributors:
-            let cachedContributorCount = self.target.cachedRecentListCount(fullName: repo.title, kind: .contributors)
             return [self.recentListSubmenuItem(RecentListConfig(
                 title: "Contributors",
                 systemImage: "person.2",
@@ -239,10 +242,11 @@ struct RepoSubmenuBuilder {
                 kind: .contributors,
                 openTitle: "Open Contributors",
                 openAction: #selector(self.target.openContributors),
-                badgeText: cachedContributorCount.flatMap { $0 > 0 ? String($0) : nil }
+                badgeText: nil
             ))]
         case .heatmap:
             guard settings.heatmap.display == .submenu, !repo.heatmap.isEmpty else { return [] }
+
             let filtered = HeatmapFilter.filter(repo.heatmap, range: self.appState.session.heatmapRange)
             let heatmap = VStack(spacing: 4) {
                 HeatmapView(
@@ -284,6 +288,7 @@ struct RepoSubmenuBuilder {
             let activityRemainder = Array(events.dropFirst(activityPreview.count))
             let hasActivityLink = repo.activityURL != nil
             guard hasActivityLink || activityPreview.isEmpty == false else { return [] }
+
             var items: [NSMenuItem] = []
             if hasActivityLink {
                 items.append(self.menuBuilder.actionItem(

@@ -29,15 +29,14 @@ struct ReleasesCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let releases = try await context.client.recentReleases(owner: owner, name: name, limit: self.limit)
+        let releases = try await context.client.recentReleases(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoReleasesOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: releases.count,
                 releases: releases.map(ReleaseOutput.init)
             )
@@ -46,7 +45,7 @@ struct ReleasesCommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("Releases: \(repoName)")
+            print("Releases: \(repo.fullName)")
         }
         for line in releasesTableLines(releases, useColor: self.output.useColor, includeURL: self.output.plain == false, now: Date()) {
             print(line)
@@ -81,15 +80,14 @@ struct CICommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let runs = try await context.client.recentWorkflowRuns(owner: owner, name: name, limit: self.limit)
+        let runs = try await context.client.recentWorkflowRuns(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoWorkflowRunsOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: runs.count,
                 runs: runs.map(WorkflowRunOutput.init)
             )
@@ -98,7 +96,7 @@ struct CICommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("CI Runs: \(repoName)")
+            print("CI Runs: \(repo.fullName)")
         }
         for line in workflowRunsTableLines(runs, useColor: self.output.useColor, includeURL: self.output.plain == false, now: Date()) {
             print(line)
@@ -133,15 +131,14 @@ struct DiscussionsCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let discussions = try await context.client.recentDiscussions(owner: owner, name: name, limit: self.limit)
+        let discussions = try await context.client.recentDiscussions(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoDiscussionsOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: discussions.count,
                 discussions: discussions.map(DiscussionOutput.init)
             )
@@ -150,7 +147,7 @@ struct DiscussionsCommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("Discussions: \(repoName)")
+            print("Discussions: \(repo.fullName)")
         }
         for line in discussionsTableLines(discussions, useColor: self.output.useColor, includeURL: self.output.plain == false, now: Date()) {
             print(line)
@@ -185,15 +182,14 @@ struct TagsCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let tags = try await context.client.recentTags(owner: owner, name: name, limit: self.limit)
+        let tags = try await context.client.recentTags(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoTagsOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: tags.count,
                 tags: tags.map(TagOutput.init)
             )
@@ -202,7 +198,7 @@ struct TagsCommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("Tags: \(repoName)")
+            print("Tags: \(repo.fullName)")
         }
         for line in tagsTableLines(tags, useColor: self.output.useColor, includeURL: self.output.plain == false) {
             print(line)
@@ -237,15 +233,14 @@ struct BranchesCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let branches = try await context.client.recentBranches(owner: owner, name: name, limit: self.limit)
+        let branches = try await context.client.recentBranches(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoBranchesOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: branches.count,
                 branches: branches.map(BranchOutput.init)
             )
@@ -254,7 +249,7 @@ struct BranchesCommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("Branches: \(repoName)")
+            print("Branches: \(repo.fullName)")
         }
         for line in branchesTableLines(branches, useColor: self.output.useColor, includeURL: self.output.plain == false) {
             print(line)
@@ -289,15 +284,14 @@ struct ContributorsCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         if self.limit <= 0 { throw ValidationError("--limit must be greater than 0") }
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
+        let repo = try requireRepoIdentifier(self.repoName)
 
         let context = try await makeAuthenticatedClient()
-        let contributors = try await context.client.topContributors(owner: owner, name: name, limit: self.limit)
+        let contributors = try await context.client.topContributors(owner: repo.owner, name: repo.name, limit: self.limit)
 
         if self.output.jsonOutput {
             let output = RepoContributorsOutput(
-                repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                repo: repo.webURL(baseHost: context.host),
                 count: contributors.count,
                 contributors: contributors.map(ContributorOutput.init)
             )
@@ -306,7 +300,7 @@ struct ContributorsCommand: CommanderRunnableCommand {
         }
 
         if self.output.plain == false, self.output.useColor {
-            print("Contributors: \(repoName)")
+            print("Contributors: \(repo.fullName)")
         }
         for line in contributorsTableLines(contributors, useColor: self.output.useColor, includeURL: self.output.plain == false) {
             print(line)
@@ -352,12 +346,12 @@ struct CommitsCommand: CommanderRunnableCommand {
         let context = try await makeAuthenticatedClient()
 
         if let target, target.contains("/") {
-            let (owner, name) = try parseRepoName(target)
-            let commits = try await context.client.recentCommits(owner: owner, name: name, limit: self.limit)
+            let repo = try parseRepoName(target)
+            let commits = try await context.client.recentCommits(owner: repo.owner, name: repo.name, limit: self.limit)
 
             if self.output.jsonOutput {
                 let output = RepoCommitsOutput(
-                    repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                    repo: repo.webURL(baseHost: context.host),
                     count: commits.items.count,
                     totalCount: commits.totalCount,
                     commits: commits.items.map(CommitOutput.init)
@@ -367,7 +361,7 @@ struct CommitsCommand: CommanderRunnableCommand {
             }
 
             if self.output.plain == false, self.output.useColor {
-                print("Commits: \(target)")
+                print("Commits: \(repo.fullName)")
             }
             for line in commitsTableLines(commits.items, useColor: self.output.useColor, includeURL: self.output.plain == false, now: Date()) {
                 print(line)
@@ -416,6 +410,9 @@ struct ActivityCommand: CommanderRunnableCommand {
     @Option(name: .customLong("scope"), help: "Activity scope (values: all, my)")
     var scope: GlobalActivityScope?
 
+    @Flag(names: [.customLong("include-repos")], help: "Merge cached repository activity like the menu profile submenu")
+    var includeRepos: Bool = false
+
     @OptionGroup
     var output: OutputOptions
 
@@ -429,6 +426,7 @@ struct ActivityCommand: CommanderRunnableCommand {
         self.limit = try values.decodeOption("limit") ?? 20
         self.login = try values.decodeOption("login")
         self.scope = try values.decodeOption("scope")
+        self.includeRepos = values.flag("includeRepos")
         self.output.bind(values)
         if values.positional.count > 1 {
             throw ValidationError("Only one repository or login can be specified")
@@ -441,13 +439,16 @@ struct ActivityCommand: CommanderRunnableCommand {
         let context = try await makeAuthenticatedClient()
 
         if let target, target.contains("/") {
-            let (owner, name) = try parseRepoName(target)
-            let repo = try await context.client.fullRepository(owner: owner, name: name)
+            if self.includeRepos {
+                throw ValidationError("--include-repos is only available for global activity")
+            }
+            let repoID = try parseRepoName(target)
+            let repo = try await context.client.fullRepository(owner: repoID.owner, name: repoID.name)
             let events = Array(repo.activityEvents.prefix(self.limit))
 
             if self.output.jsonOutput {
                 let output = RepoActivityOutput(
-                    repo: makeRepoURL(baseHost: context.settings.enterpriseHost ?? context.settings.githubHost, owner: owner, name: name),
+                    repo: repoID.webURL(baseHost: context.host),
                     count: events.count,
                     events: events
                 )
@@ -456,7 +457,7 @@ struct ActivityCommand: CommanderRunnableCommand {
             }
 
             if self.output.plain == false, self.output.useColor {
-                print("Activity: \(target)")
+                print("Activity: \(repoID.fullName)")
             }
             for line in activityTableLines(events, useColor: self.output.useColor, includeURL: self.output.plain == false, now: Date()) {
                 print(line)
@@ -470,7 +471,20 @@ struct ActivityCommand: CommanderRunnableCommand {
         } else {
             try await context.client.currentUser().username
         }
-        let events = try await context.client.userActivityEvents(username: login, scope: scope, limit: self.limit)
+        let userEvents = try await context.client.userActivityEvents(username: login, scope: scope, limit: self.limit)
+        let events: [ActivityEvent]
+        if self.includeRepos {
+            let repositories = await (try? context.client.cachedRepositoryList(limit: nil)) ?? []
+            events = GlobalActivityMerger.merge(
+                userEvents: userEvents,
+                repoEvents: GlobalActivityMerger.repositoryEvents(from: repositories),
+                scope: scope,
+                username: login,
+                limit: self.limit
+            )
+        } else {
+            events = userEvents
+        }
 
         if self.output.jsonOutput {
             let output = GlobalActivityOutput(
@@ -486,7 +500,7 @@ struct ActivityCommand: CommanderRunnableCommand {
         if self.output.plain == false, self.output.useColor {
             print("Activity: \(login)")
         }
-        let host = context.settings.enterpriseHost ?? context.settings.githubHost
+        let host = context.host
         for line in globalActivityTableLines(
             events,
             useColor: self.output.useColor,

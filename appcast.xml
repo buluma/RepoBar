@@ -3,37 +3,55 @@
     <channel>
         <title>RepoBar</title>
         <item>
-            <title>0.2.0</title>
-            <pubDate>Thu, 22 Jan 2026 06:25:29 +0000</pubDate>
+            <title>0.8.6</title>
+            <pubDate>Mon, 06 Jul 2026 01:16:31 -0700</pubDate>
             <link>https://raw.githubusercontent.com/steipete/RepoBar/main/appcast.xml</link>
-            <sparkle:version>4</sparkle:version>
-            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:version>27</sparkle:version>
+            <sparkle:shortVersionString>0.8.6</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
-            <description><![CDATA[<ul><li>Fix the menu getting stuck on “Loading repositories…” by staging the initial repo list load.</li><li>Fix menubar clicks doing nothing by attaching the status item via a fallback path.</li><li>Add Personal Access Token authentication with persistence + logout fixes (#21, thanks @kkiermasz).</li><li>Add GitHub.com vs Enterprise login picker with OAuth help text (#4).</li><li>Show OAuth errors in Accounts sign-in UI (#6).</li><li>Add token status checks + forced refresh buttons in Settings for debugging auth issues.</li><li>Prevent token check/refresh from hanging; add timeouts and diagnostics logging.</li><li>Detect auth failures (401/refresh errors) and log out cleanly with a clearer message.</li><li>Preserve keychain access groups in signed builds so app + CLI share tokens (#16, thanks @jj3ny).</li><li>Allow importing GitHub CLI tokens with host matching and no refresh loop (#24, thanks @bahag-chaurasiak).</li><li>Surface a clear error when the OAuth loopback port is already in use (#17, thanks @kiranjd).</li><li>Add “Show only my repositories” toggle (owner filter) for repo lists and search.</li><li>Fix the toggle to reset to “show all” when disabled; disable it when signed out.</li><li>Fix commit links to respect GitHub Enterprise host (#9).</li><li>Make pinned/hidden repo matching case-insensitive (fixes private repo pinning edge cases).</li><li>Keep the menu open after pin/unpin/hide/move actions (#25, thanks @bahag-chaurasiak).</li><li>Make Local Projects scan depth configurable (default 4) (#11, thanks @shunkakinoki).</li><li>Stabilize repo settings autocomplete (no spinner layout wiggle), widen the dropdown, show repo stats/badges, fix filtering/hover/scroll, and anchor/size the dropdown to results (no bounce on shrink).</li><li>Widen Enterprise Base URL field and shrink auth progress indicators to avoid layout jumps.</li><li>Derive activity commit links from repo URL when event repo name is missing or malformed.</li><li>iOS: update app icon + logo assets.</li></ul>
+            <description><![CDATA[<h2>RepoBar 0.8.6</h2>
+<ul>
+<li>Replace the loading spinners in the menu with an animated contribution graph that spells &quot;REPOBAR&quot; while repositories and the contribution heatmap load, matching the repobar.app wordmark animation.</li>
+<li>Reimagine the repobar.app website as a dark, menu-bar-themed page with a live menu mockup, a contribution-graph wordmark, current features like the reference monitor and multi-account support, and the corrected macOS 15 minimum system requirement.</li>
+</ul>
+<p><a href="https://github.com/steipete/RepoBar/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.2.0/RepoBar-0.2.0.zip" length="15018239" type="application/octet-stream" sparkle:edSignature="qecsK4GJXXmRo7k1JNhRo/hdpqVmL7CWCJtAmZivihkL2IWpXorq3PQk/KE32FobhdKXdIweaZH+oLowVevlAw=="/>
+            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.8.6/RepoBar-0.8.6.zip" length="26030994" type="application/octet-stream" sparkle:edSignature="FMd4FttwKaoB6f2/Rc/n4aUbzcyRrt2F1lVwTB6IEm4MOjYderISbtEzyDXsSjzpfwfDG5B1OnL6s7IoREugAw=="/>
         </item>
         <item>
-            <title>0.1.2</title>
-            <pubDate>Wed, 31 Dec 2025 22:40:17 +0100</pubDate>
+            <title>0.8.5</title>
+            <pubDate>Sun, 05 Jul 2026 01:34:11 -0700</pubDate>
             <link>https://raw.githubusercontent.com/steipete/RepoBar/main/appcast.xml</link>
-            <sparkle:version>3</sparkle:version>
-            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>0.8.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
-            <description><![CDATA[<ul><li>iOS app preview (not finished, not in the App Store yet): repo list/cards, activity feed, detail drill‑downs, login/settings, icons/branding, and continued auth/UI polish.</li><li>CLI parity expansion: new repo list subcommands (releases, CI runs, discussions, tags, branches, contributors, commits, activity) plus `--owner/--mine` filters.</li><li>CLI local actions + settings: sync/rebase/reset/checkout, branch/worktree listings, Finder/Terminal open; pin/hide and settings show/set; installer for `repobar`.</li><li>Changelog UX: submenu preview improvements plus Markdown rendering upgrades (block layout, scrollable preview, header alignment).</li><li>Changelog UX: show the first released section headline in the submenu badge (skips Unreleased).</li><li>Changelog UX: prefetch on repo submenu open and refresh the badge after load.</li><li>Changelog UX: switch to Swift Markdown AST parsing for cross-platform block rendering.</li><li>Releases submenu: show latest release name next to the count badge.</li><li>Menu customization: Display settings to reorder/hide main menu and repo submenu items (reset to defaults), with spacing tweaks.</li><li>Logging/diagnostics: swift-log integration with OSLog + optional file logging; debug logging settings for macOS/iOS.</li><li>Reliability: menu rehydrate on attach, invalidate empty menu cache, stabilize contribution header heatmap size, limit “More” submenus to 20 entries.</li><li>Repo access + errors: include org/collaborator repos, improve repo detail error messaging, cache discussions capability and hide disabled entries.</li></ul>
+            <description><![CDATA[<h2>RepoBar 0.8.5</h2>
+<ul>
+<li>Restore the signed-in account immediately after restarting RepoBar when its persisted credentials are still available.</li>
+</ul>
+<p><a href="https://github.com/steipete/RepoBar/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.1.2/RepoBar-0.1.2.zip" length="14747018" type="application/octet-stream" sparkle:edSignature="CC6sk/wStzPOmGAaxiwo8f/JVJocglx5ZFtlZbNUor0d3tIVLqrlgrlsM0mWqBuVKkher5U3Bnu+L9EntzZ6Bw=="/>
+            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.8.5/RepoBar-0.8.5.zip" length="26005767" type="application/octet-stream" sparkle:edSignature="E2HSNZTIwNlTlJ1++RVhNw+G9Sk2quZ0+BSc8+ke3KV1cKNMWlW81RIjB1pAOKcFKxHkzu7R6LENpbv436P2Bg=="/>
         </item>
         <item>
-            <title>0.1.1</title>
-            <pubDate>Wed, 31 Dec 2025 03:08:30 +0100</pubDate>
+            <title>0.8.4</title>
+            <pubDate>Thu, 02 Jul 2026 08:43:53 +0100</pubDate>
             <link>https://raw.githubusercontent.com/steipete/RepoBar/main/appcast.xml</link>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.1.1</sparkle:shortVersionString>
+            <sparkle:version>25</sparkle:version>
+            <sparkle:shortVersionString>0.8.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>10.13</sparkle:minimumSystemVersion>
-            <description><![CDATA[<ul><li>Fix CLI: allow invoking bundled `repobarcli` directly (argv0 normalization).</li></ul>
+            <description><![CDATA[<h2>RepoBar 0.8.4</h2>
+<ul>
+<li>Coalesce concurrent OAuth token refreshes per account so rotating refresh tokens cannot race or overwrite newer credentials.</li>
+<li>Keep repository submenus associated with the correct repository when GitHub&#x27;s opaque node ID differs from its full name.</li>
+<li>Persist the repository display limit from Settings and expose the active heatmap color control in General settings.</li>
+<li>Keep every Settings tab inside the visible display frame, allow bounded manual resizing, and prevent the Repositories table from forcing the window under the Dock (thanks @Yuxin-Qiao). (#84)</li>
+<li>Update Kingfisher to 8.10.0 for safer asynchronous image cancellation and macOS image decoding.</li>
+<li>Update esbuild to 0.28.1 to address upstream development-tool security advisories.</li>
+</ul>
+<p><a href="https://github.com/steipete/RepoBar/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.1.1/RepoBar-0.1.1.zip" length="11338886" type="application/octet-stream" sparkle:edSignature="nJ4XzYOz3dPYXdEXPJUnYCNJjdnR/j9l7yy5lgT7vxvr8yhe3e39B9Gh4Maf+Nqg5pNsL3xVPcCgbAraiXj9Ag=="/>
+            <enclosure url="https://github.com/steipete/RepoBar/releases/download/v0.8.4/RepoBar-0.8.4.zip" length="26002669" type="application/octet-stream" sparkle:edSignature="gT3YuQR97vjl7Cn+2g7YGplZPutSmrywFgA+v2kHzYtUIH4anEdO7qiclLLDZV6ditDSMdGtdX7Kd0ghIO96CA=="/>
         </item>
     </channel>
 </rss>

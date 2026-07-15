@@ -45,7 +45,9 @@ public struct LocalRepoStatus: Equatable, Sendable {
         self.lastFetchAt = lastFetchAt
     }
 
-    public var displayName: String { self.fullName ?? self.name }
+    public var displayName: String {
+        self.fullName ?? self.name
+    }
 
     public var syncDetail: String {
         switch self.syncState {
@@ -129,6 +131,7 @@ public enum LocalSyncState: String, Equatable, Sendable {
     public static func resolve(isClean: Bool, ahead: Int?, behind: Int?) -> LocalSyncState {
         if !isClean { return .dirty }
         guard let ahead, let behind else { return .unknown }
+
         if ahead == 0, behind == 0 { return .synced }
         if behind > 0, ahead == 0 { return .behind }
         if ahead > 0, behind == 0 { return .ahead }
@@ -224,6 +227,25 @@ public struct LocalRepoIndex: Equatable, Sendable {
         return nil
     }
 
+    public func status(forRepositoryName name: String) -> LocalRepoStatus? {
+        self.uniqueStatus(forName: name)
+    }
+
+    public func status(containingPath path: String) -> LocalRepoStatus? {
+        let normalizedPath = URL(fileURLWithPath: PathFormatter.expandTilde(path)).standardizedFileURL.path
+        if let exact = self.byPath[normalizedPath] { return exact }
+
+        let matches = self.all.filter { status in
+            let repoPath = status.path.standardizedFileURL.path
+            return normalizedPath == repoPath || normalizedPath.hasPrefix(repoPath + "/")
+        }
+        guard matches.isEmpty == false else { return nil }
+
+        return matches.reduce(matches[0]) { current, candidate in
+            current.path.path.count >= candidate.path.path.count ? current : candidate
+        }
+    }
+
     private func uniqueStatus(forName name: String) -> LocalRepoStatus? {
         if let exact = self.uniqueStatus(in: self.byName, forKey: name) { return exact }
         return self.uniqueStatus(in: self.byNameLowercased, forKey: name.lowercased())
@@ -231,11 +253,13 @@ public struct LocalRepoIndex: Equatable, Sendable {
 
     private func uniqueStatus(in index: [String: [LocalRepoStatus]], forKey key: String) -> LocalRepoStatus? {
         guard let matches = index[key], matches.count == 1 else { return nil }
+
         return matches.first
     }
 
     private func preferredStatus(in index: [String: [LocalRepoStatus]], forKey key: String) -> LocalRepoStatus? {
         guard let matches = index[key], matches.isEmpty == false else { return nil }
+
         return matches.reduce(matches[0]) { current, candidate in
             Self.preferredStatus(current, candidate)
         }

@@ -20,6 +20,7 @@ struct AboutSettingsView: View {
 
     private var buildTimestamp: String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: "RepoBarBuildTimestamp") as? String else { return nil }
+
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime]
         guard let date = parser.date(from: raw) else { return raw }
@@ -107,6 +108,9 @@ struct AboutSettingsView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 4)
             }
+            Button("Copy Update Diagnostics") {
+                self.copyUpdateDiagnostics()
+            }
 
             Text("© 2025 Peter Steinberger. MIT License.")
                 .font(.footnote)
@@ -119,6 +123,7 @@ struct AboutSettingsView: View {
         .padding(.bottom, 22)
         .onAppear {
             guard !self.didSyncUpdater else { return }
+
             if SparkleController.shared.canCheckForUpdates {
                 SparkleController.shared.automaticallyChecksForUpdates = self.autoUpdateEnabled
                 SparkleController.shared.automaticallyDownloadsUpdates = self.autoUpdateEnabled
@@ -131,5 +136,13 @@ struct AboutSettingsView: View {
                 SparkleController.shared.automaticallyDownloadsUpdates = newValue
             }
         }
+    }
+
+    private func copyUpdateDiagnostics() {
+        let diagnostics = UpdateDiagnostics.current(
+            canCheckForUpdates: SparkleController.shared.canCheckForUpdates
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnostics.pasteboardText, forType: .string)
     }
 }

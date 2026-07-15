@@ -4,8 +4,12 @@ public struct Repository: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let owner: String
+    public let description: String?
+    public let language: String?
+    public let topics: [String]
     public let isFork: Bool
     public let isArchived: Bool
+    public let viewerCanRead: Bool
     public let sortOrder: Int?
     public var error: String?
     public var rateLimitedUntil: Date?
@@ -24,8 +28,12 @@ public struct Repository: Identifiable, Equatable, Sendable {
         id: String,
         name: String,
         owner: String,
+        description: String? = nil,
+        language: String? = nil,
+        topics: [String] = [],
         isFork: Bool = false,
         isArchived: Bool = false,
+        viewerCanRead: Bool = true,
         sortOrder: Int?,
         error: String?,
         rateLimitedUntil: Date?,
@@ -47,8 +55,12 @@ public struct Repository: Identifiable, Equatable, Sendable {
         self.id = id
         self.name = name
         self.owner = owner
+        self.description = description
+        self.language = language
+        self.topics = topics
         self.isFork = isFork
         self.isArchived = isArchived
+        self.viewerCanRead = viewerCanRead
         self.sortOrder = sortOrder
         self.error = error
         self.rateLimitedUntil = rateLimitedUntil
@@ -70,15 +82,21 @@ public struct Repository: Identifiable, Equatable, Sendable {
         self.discussionsEnabled = discussionsEnabled
     }
 
-    public var fullName: String { "\(self.owner)/\(self.name)" }
+    public var fullName: String {
+        "\(self.owner)/\(self.name)"
+    }
 
     public func withOrder(_ order: Int?) -> Repository {
         Repository(
             id: self.id,
             name: self.name,
             owner: self.owner,
+            description: self.description,
+            language: self.language,
+            topics: self.topics,
             isFork: self.isFork,
             isArchived: self.isArchived,
+            viewerCanRead: self.viewerCanRead,
             sortOrder: order,
             error: self.error,
             rateLimitedUntil: self.rateLimitedUntil,

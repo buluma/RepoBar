@@ -5,8 +5,8 @@ import Testing
 
 struct CLIOutputTests {
     @Test
-    func repoLabelUsesNameWhenURLsDisabled() {
-        let url = URL(string: "https://github.com/steipete/RepoBar")!
+    func `repo label uses name when UR ls disabled`() throws {
+        let url = try #require(URL(string: "https://github.com/steipete/RepoBar"))
         let label = formatRepoLabel(
             repoName: "steipete/RepoBar",
             repoURL: url,
@@ -17,8 +17,8 @@ struct CLIOutputTests {
     }
 
     @Test
-    func repoLabelUsesURLWhenEnabled() {
-        let url = URL(string: "https://github.com/steipete/RepoBar")!
+    func `repo label uses URL when enabled`() throws {
+        let url = try #require(URL(string: "https://github.com/steipete/RepoBar"))
         let label = formatRepoLabel(
             repoName: "steipete/RepoBar",
             repoURL: url,
@@ -29,7 +29,7 @@ struct CLIOutputTests {
     }
 
     @Test
-    func eventLabelUsesTextWithoutURL() {
+    func `event label uses text without URL`() {
         let label = formatEventLabel(
             text: "push",
             url: nil,
@@ -40,8 +40,8 @@ struct CLIOutputTests {
     }
 
     @Test
-    func eventLabelUsesURLWhenEnabled() {
-        let url = URL(string: "https://github.com/steipete/RepoBar/pull/1")!
+    func `event label uses URL when enabled`() throws {
+        let url = try #require(URL(string: "https://github.com/steipete/RepoBar/pull/1"))
         let label = formatEventLabel(
             text: "PullRequestEvent",
             url: url,
@@ -52,17 +52,17 @@ struct CLIOutputTests {
     }
 
     @Test
-    func releaseDateFormattingIsStable() {
+    func `release date formatting is stable`() throws {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let date = calendar.date(from: DateComponents(year: 2025, month: 12, day: 26, hour: 23, minute: 59))!
-        let now = calendar.date(byAdding: .day, value: 10, to: date)!
+        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        let date = try #require(calendar.date(from: DateComponents(year: 2025, month: 12, day: 26, hour: 23, minute: 59)))
+        let now = try #require(calendar.date(byAdding: .day, value: 10, to: date))
         #expect(ReleaseFormatter.releasedLabel(for: date, now: now) == "2025-12-26")
     }
 
     @Test
-    func renderTableIncludesReleaseColumnsWhenEnabled() throws {
-        let baseHost = URL(string: "https://github.com")!
+    func `render table includes release columns when enabled`() throws {
+        let baseHost = try #require(URL(string: "https://github.com"))
         let releaseDate = Date(timeIntervalSinceReferenceDate: 12345)
         let repo = Repository(
             id: "1",
@@ -120,8 +120,8 @@ struct CLIOutputTests {
     }
 
     @Test
-    func renderJSONIncludesLatestRelease() throws {
-        let baseHost = URL(string: "https://github.com")!
+    func `render JSON includes latest release`() throws {
+        let baseHost = try #require(URL(string: "https://github.com"))
         let releaseDate = Date(timeIntervalSinceReferenceDate: 777)
         let repo = Repository(
             id: "1",
@@ -152,8 +152,8 @@ struct CLIOutputTests {
     }
 
     @Test
-    func tableHidesEventColumnByDefault() throws {
-        let baseHost = URL(string: "https://github.com")!
+    func `table hides event column by default`() throws {
+        let baseHost = try #require(URL(string: "https://github.com"))
         let repo = Repository(
             id: "1",
             name: "RepoBar",
@@ -190,8 +190,8 @@ struct CLIOutputTests {
     }
 
     @Test
-    func tableShowsEventColumnWhenEnabled() throws {
-        let baseHost = URL(string: "https://github.com")!
+    func `table shows event column when enabled`() throws {
+        let baseHost = try #require(URL(string: "https://github.com"))
         let repo = Repository(
             id: "1",
             name: "RepoBar",
@@ -228,14 +228,14 @@ struct CLIOutputTests {
     }
 
     @Test
-    func releasedUsesTodayAndYesterdayLabels() {
+    func `released uses today and yesterday labels`() throws {
         var calendar = Calendar.current
         calendar.timeZone = Calendar.current.timeZone
 
-        let now = calendar.date(from: DateComponents(year: 2025, month: 12, day: 26, hour: 12))!
-        let today = calendar.date(byAdding: .hour, value: -2, to: now)!
-        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
-        let older = calendar.date(byAdding: .day, value: -6, to: now)!
+        let now = try #require(calendar.date(from: DateComponents(year: 2025, month: 12, day: 26, hour: 12)))
+        let today = try #require(calendar.date(byAdding: .hour, value: -2, to: now))
+        let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: now))
+        let older = try #require(calendar.date(byAdding: .day, value: -6, to: now))
 
         #expect(ReleaseFormatter.releasedLabel(for: today, now: now) == "today")
         #expect(ReleaseFormatter.releasedLabel(for: yesterday, now: now) == "yesterday")

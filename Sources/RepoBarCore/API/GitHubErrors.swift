@@ -42,14 +42,18 @@ public enum GitHubAPIError: Error {
 }
 
 extension GitHubAPIError: LocalizedError {
-    public var errorDescription: String? { self.displayMessage }
+    public var errorDescription: String? {
+        self.displayMessage
+    }
 }
 
 struct RepoErrorAccumulator {
     private(set) var messages: [String] = []
     private(set) var rateLimit: Date?
 
-    var message: String? { self.messages.first }
+    var message: String? {
+        self.messages.first
+    }
 
     mutating func absorb(_ error: Error) {
         if let gh = error as? GitHubAPIError {
@@ -62,11 +66,13 @@ struct RepoErrorAccumulator {
 
     private mutating func appendUnique(_ message: String) {
         guard !self.messages.contains(message) else { return }
+
         self.messages.append(message)
     }
 
     private mutating func updateLimit(with candidate: Date?) {
         guard let candidate else { return }
+
         if let current = rateLimit {
             if candidate > current { self.rateLimit = candidate }
         } else {

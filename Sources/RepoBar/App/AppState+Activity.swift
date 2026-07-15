@@ -13,7 +13,7 @@ extension AppState {
         scope: GlobalActivityScope,
         repos: [Repository]
     ) async -> GlobalActivityResult {
-        let repoEvents = repos.flatMap(\.activityEvents)
+        let repoEvents = GlobalActivityMerger.repositoryEvents(from: repos)
         async let activityResult: Result<[ActivityEvent], Error> = self.capture {
             try await self.github.userActivityEvents(
                 username: username,
@@ -51,7 +51,7 @@ extension AppState {
             commitError = error.userFacingMessage
         }
 
-        let merged = self.mergeGlobalActivityEvents(
+        let merged = GlobalActivityMerger.merge(
             userEvents: activityEvents,
             repoEvents: repoEvents,
             scope: scope,
@@ -67,30 +67,6 @@ extension AppState {
         )
     }
 
-    private func mergeGlobalActivityEvents(
-        userEvents: [ActivityEvent],
-        repoEvents: [ActivityEvent],
-        scope: GlobalActivityScope,
-        username: String,
-        limit: Int
-    ) -> [ActivityEvent] {
-        let combined = userEvents + repoEvents
-        let filtered = scope == .myActivity
-            ? combined.filter { $0.actor.caseInsensitiveCompare(username) == .orderedSame }
-            : combined
-        let sorted = filtered.sorted { $0.date > $1.date }
-        var seen: Set<String> = []
-        var results: [ActivityEvent] = []
-        results.reserveCapacity(limit)
-        for event in sorted {
-            let key = "\(event.url.absoluteString)|\(event.date.timeIntervalSinceReferenceDate)|\(event.actor)"
-            guard seen.insert(key).inserted else { continue }
-            results.append(event)
-            if results.count >= limit { break }
-        }
-        return results
-    }
-
     private func capture<T>(_ work: @escaping () async throws -> T) async -> Result<T, Error> {
         do { return try await .success(work()) } catch { return .failure(error) }
     }
@@ -100,6 +76,7 @@ extension AppState {
         pinned: [String]
     ) async -> [Repository] {
         guard !pinned.isEmpty else { return repos }
+
         let existing = Set(repos.map { $0.fullName.lowercased() })
         let targets = self.pinnedRepoTargets(from: pinned, excluding: existing)
         guard !targets.isEmpty else { return repos }
@@ -134,7 +111,9 @@ extension AppState {
         let owner: String
         let name: String
 
-        var fullName: String { "\(self.owner)/\(self.name)" }
+        var fullName: String {
+            "\(self.owner)/\(self.name)"
+        }
     }
 
     private func pinnedRepoTargets(
@@ -146,15 +125,19 @@ extension AppState {
         for raw in pinned {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
+
             let parts = trimmed.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { continue }
+
             let owner = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let name = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !owner.isEmpty, !name.isEmpty else { continue }
+
             let fullName = "\(owner)/\(name)"
             let normalized = fullName.lowercased()
             guard !existing.contains(normalized) else { continue }
             guard seen.insert(normalized).inserted else { continue }
+
             targets.append(PinnedRepoTarget(owner: owner, name: name))
         }
         return targets

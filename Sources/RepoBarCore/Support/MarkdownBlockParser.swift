@@ -76,6 +76,7 @@ private struct MarkdownBlockBuilder {
     ) {
         let paragraphs = listItem.children.compactMap { child -> String? in
             guard let paragraph = child as? Paragraph else { return nil }
+
             let text = self.inlineMarkdown(from: paragraph)
             return text.isEmpty ? nil : text
         }
@@ -158,11 +159,15 @@ private struct MarkdownBlockBuilder {
 }
 
 private extension SoftBreak {
-    var renderedText: String { "\n" }
+    var renderedText: String {
+        "\n"
+    }
 }
 
 private extension LineBreak {
-    var renderedText: String { "\n" }
+    var renderedText: String {
+        "\n"
+    }
 }
 
 private extension ListItemContainer {

@@ -55,22 +55,29 @@ public enum RepositoryQueryDefaults {
         ageDays: Int = defaultAgeDays
     ) -> Date? {
         guard scope == .all, ageDays > 0 else { return nil }
+
         return Calendar.current.date(byAdding: .day, value: -ageDays, to: now)
     }
 }
 
 public enum RepositoryPipeline {
     public static func apply(_ repos: [Repository], query: RepositoryQuery) -> [Repository] {
-        var filtered = repos
+        var filtered = RepositoryUniquing.byFullName(repos)
         let pinnedSet = Set(query.pinned.map { $0.lowercased() })
         let hiddenSet = Set(query.hidden.map { $0.lowercased() })
 
         switch query.scope {
         case .hidden:
-            filtered = filtered.filter { hiddenSet.contains($0.fullName.lowercased()) }
+            filtered = filtered.filter {
+                let key = $0.fullName.lowercased()
+                return hiddenSet.contains(key) && !pinnedSet.contains(key)
+            }
         case .all, .pinned:
             if !hiddenSet.isEmpty {
-                filtered = filtered.filter { !hiddenSet.contains($0.fullName.lowercased()) }
+                filtered = filtered.filter {
+                    let key = $0.fullName.lowercased()
+                    return !hiddenSet.contains(key) || pinnedSet.contains(key)
+                }
             }
         }
 

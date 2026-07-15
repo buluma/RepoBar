@@ -2,7 +2,7 @@ import Commander
 import Foundation
 import RepoBarCore
 
-struct OnlyWithSelection: ExpressibleFromArgument, Sendable {
+struct OnlyWithSelection: ExpressibleFromArgument {
     let filter: RepositoryOnlyWith
 
     init?(argument: String) {
@@ -28,6 +28,7 @@ struct OnlyWithSelection: ExpressibleFromArgument, Sendable {
         }
 
         guard requireIssues || requirePRs else { return nil }
+
         self.filter = RepositoryOnlyWith(requireIssues: requireIssues, requirePRs: requirePRs)
     }
 }

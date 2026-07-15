@@ -5,6 +5,10 @@ actor GraphQLClient {
     private var endpoint: URL = .init(string: "https://api.github.com/graphql")!
     private var tokenProvider: (@Sendable () async throws -> String)?
     private var rateLimit: RateLimitSnapshot?
+    private let responseCache: GraphQLResponseDiskCache?
+    private let dataLoader: HTTPDataLoader
+    private let responseCacheTTL: TimeInterval = 15 * 60
+    private let requestLimiter = AsyncPermitPool(limit: 4)
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -12,6 +16,14 @@ actor GraphQLClient {
     }()
 
     private let diag = DiagnosticsLogger.shared
+
+    init(
+        responseCache: GraphQLResponseDiskCache? = GraphQLResponseDiskCache.standard(),
+        dataLoader: HTTPDataLoader = .live
+    ) {
+        self.responseCache = responseCache
+        self.dataLoader = dataLoader
+    }
 
     func setEndpoint(apiHost: URL) {
         // For GitHub.com apiHost is https://api.github.com
@@ -39,9 +51,7 @@ actor GraphQLClient {
             query RepoSummary($owner: String!, $name: String!) {
               repository(owner: $owner, name: $name) {
                 name
-                releases(last: 1, orderBy: {field: CREATED_AT, direction: DESC}) {
-                  nodes { name tagName publishedAt url }
-                }
+                latestRelease { name tagName publishedAt createdAt url isDraft isPrerelease isLatest }
                 issues(states: OPEN) { totalCount }
                 pullRequests(states: OPEN) { totalCount }
               }
@@ -50,41 +60,74 @@ actor GraphQLClient {
             variables: ["owner": owner, "name": name]
         )
 
+        let bodyData = try JSONEncoder().encode(body)
+        let cacheKey = self.cacheKey(operation: "RepoSummary", bodyData: bodyData)
+        if let cached = self.responseCache?.cached(key: cacheKey, maxAge: self.responseCacheTTL) {
+            await self.diag.message("GraphQL RepoSummary \(owner)/\(name) cached")
+            return try Self.decodeRepoSummary(from: cached.data, owner: owner, name: name)
+        }
+
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = bodyData
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await self.data(for: request)
+        } catch {
+            if let stale = self.responseCache?.stale(key: cacheKey) {
+                await self.diag.message("GraphQL RepoSummary \(owner)/\(name) using stale cache after \(error.userFacingMessage)")
+                return try Self.decodeRepoSummary(from: stale.data, owner: owner, name: name)
+            }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
         await self.logGraphQLResponse(http, label: "RepoSummary", startedAt: startedAt)
         if let snapshot = RateLimitSnapshot.from(response: http) {
             self.rateLimit = snapshot
         }
         guard http.statusCode == 200 else {
             await self.diag.message("GraphQL status \(http.statusCode) for \(owner)/\(name)")
+            if let stale = self.responseCache?.stale(key: cacheKey), Self.canUseStaleCache(for: http.statusCode) {
+                await self.diag.message("GraphQL RepoSummary \(owner)/\(name) using stale cache for HTTP \(http.statusCode)")
+                return try Self.decodeRepoSummary(from: stale.data, owner: owner, name: name)
+            }
             if http.statusCode == 401 {
                 throw URLError(.userAuthenticationRequired)
             }
-            throw URLError(.badServerResponse)
+            throw self.graphQLError(response: http)
         }
 
+        self.responseCache?.save(key: cacheKey, endpoint: self.endpoint, operation: "RepoSummary", body: bodyData, responseBody: data)
+        return try Self.decodeRepoSummary(from: data, owner: owner, name: name)
+    }
+
+    nonisolated static func decodeRepoSummary(from data: Data, owner _: String, name _: String) throws -> RepoSummary {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         let decoded = try decoder.decode(GraphQLResponse<RepoSummaryData>.self, from: data)
         guard let repo = decoded.data.repository else {
-            await self.diag.message("GraphQL missing repository for \(owner)/\(name)")
             throw URLError(.cannotParseResponse)
         }
 
-        let release: Release? = repo.releases.nodes?.first.flatMap {
-            Release(name: $0.name ?? $0.tagName, tag: $0.tagName, publishedAt: $0.publishedAt, url: $0.url)
-        }
+        let release = Self.latestRelease(from: repo.latestRelease)
 
         return RepoSummary(
             openIssues: repo.issues.totalCount,
             openPulls: repo.pullRequests.totalCount,
             release: release
         )
+    }
+
+    private nonisolated static func latestRelease(from release: ReleaseNode?) -> Release? {
+        guard let release, release.isLatest, release.isDraft == false, release.isPrerelease == false else { return nil }
+
+        let date = release.publishedAt ?? release.createdAt ?? Date.distantPast
+        return Release(name: release.name ?? release.tagName, tag: release.tagName, publishedAt: date, url: release.url)
     }
 
     func userContributionHeatmap(login: String) async throws -> [HeatmapCell] {
@@ -112,29 +155,55 @@ actor GraphQLClient {
             variables: ["login": login]
         )
 
+        let bodyData = try JSONEncoder().encode(body)
+        let cacheKey = self.cacheKey(operation: "UserContributions", bodyData: bodyData)
+        if let cached = self.responseCache?.cached(key: cacheKey, maxAge: self.responseCacheTTL) {
+            await self.diag.message("GraphQL UserContributions \(login) cached")
+            return try self.decodeContributionHeatmap(from: cached.data, login: login)
+        }
+
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = bodyData
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await self.data(for: request)
+        } catch {
+            if let stale = self.responseCache?.stale(key: cacheKey) {
+                await self.diag.message("GraphQL UserContributions \(login) using stale cache after \(error.userFacingMessage)")
+                return try self.decodeContributionHeatmap(from: stale.data, login: login)
+            }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
         await self.logGraphQLResponse(http, label: "UserContributions", startedAt: startedAt)
         if let snapshot = RateLimitSnapshot.from(response: http) {
             self.rateLimit = snapshot
         }
         guard http.statusCode == 200 else {
             await self.diag.message("GraphQL status \(http.statusCode) for contributions \(login)")
+            if let stale = self.responseCache?.stale(key: cacheKey), Self.canUseStaleCache(for: http.statusCode) {
+                await self.diag.message("GraphQL UserContributions \(login) using stale cache for HTTP \(http.statusCode)")
+                return try self.decodeContributionHeatmap(from: stale.data, login: login)
+            }
             if http.statusCode == 401 {
                 throw URLError(.userAuthenticationRequired)
             }
-            throw URLError(.badServerResponse)
+            throw self.graphQLError(response: http)
         }
 
+        self.responseCache?.save(key: cacheKey, endpoint: self.endpoint, operation: "UserContributions", body: bodyData, responseBody: data)
+        return try self.decodeContributionHeatmap(from: data, login: login)
+    }
+
+    private func decodeContributionHeatmap(from data: Data, login _: String) throws -> [HeatmapCell] {
         let decoded = try decoder.decode(GraphQLResponse<UserContributionData>.self, from: data)
         guard let weeks = decoded.data.user?.contributionsCollection.contributionCalendar.weeks else {
-            await self.diag.message("GraphQL missing contribution weeks for \(login)")
             return []
         }
 
@@ -172,6 +241,44 @@ actor GraphQLClient {
             "GraphQL \(label) status=\(response.statusCode) res=\(resource) lim=\(limit) rem=\(remaining) used=\(used) reset=\(resetText) dur=\(durationMs)ms"
         )
     }
+
+    private func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await self.requestLimiter.acquire()
+        do {
+            let result = try await self.dataLoader.data(for: request)
+            await self.requestLimiter.release()
+            return result
+        } catch {
+            await self.requestLimiter.release()
+            throw error
+        }
+    }
+
+    private func cacheKey(operation: String, bodyData: Data) -> String {
+        let body = String(data: bodyData, encoding: .utf8) ?? bodyData.base64EncodedString()
+        return "\(self.endpoint.absoluteString)\t\(operation)\t\(body)"
+    }
+
+    private func graphQLError(response: HTTPURLResponse) -> Error {
+        if response.statusCode == 403 || response.statusCode == 429 {
+            let reset = RateLimitSnapshot.from(response: response)?.reset
+            return GitHubAPIError.rateLimited(
+                until: reset,
+                message: "GitHub GraphQL rate limit hit."
+            )
+        }
+        if response.statusCode == 502 || response.statusCode == 503 || response.statusCode == 504 {
+            return GitHubAPIError.serviceUnavailable(
+                retryAfter: nil,
+                message: "GitHub GraphQL is temporarily unavailable."
+            )
+        }
+        return URLError(.badServerResponse)
+    }
+
+    private static func canUseStaleCache(for statusCode: Int) -> Bool {
+        statusCode == 403 || statusCode == 429 || statusCode == 502 || statusCode == 503 || statusCode == 504
+    }
 }
 
 struct RepoSummary {
@@ -196,20 +303,20 @@ private struct RepoSummaryData: Decodable {
 }
 
 private struct RepoSummaryNode: Decodable {
-    let releases: ReleaseConnection
+    let latestRelease: ReleaseNode?
     let issues: CountContainer
     let pullRequests: CountContainer
-}
-
-private struct ReleaseConnection: Decodable {
-    let nodes: [ReleaseNode]?
 }
 
 private struct ReleaseNode: Decodable {
     let name: String?
     let tagName: String
-    let publishedAt: Date
+    let publishedAt: Date?
+    let createdAt: Date?
     let url: URL
+    let isDraft: Bool
+    let isPrerelease: Bool
+    let isLatest: Bool
 }
 
 private struct CountContainer: Decodable {
@@ -255,6 +362,7 @@ struct ContributionDay: Decodable {
                 debugDescription: "Unsupported date format: \(rawDate)"
             )
         }
+
         self.date = parsedDate
         self.contributionCount = try container.decode(Int.self, forKey: .contributionCount)
     }

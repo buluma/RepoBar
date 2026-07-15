@@ -11,6 +11,7 @@ struct MenuBuildSignature: Hashable {
     let settings: MenuSettingsSignature
     let hasLoadedRepositories: Bool
     let rateLimitReset: Date?
+    let rateLimits: RateLimitMenuSignature
     let lastError: String?
     let contribution: ContributionSignature
     let globalActivity: ActivitySignature
@@ -18,7 +19,175 @@ struct MenuBuildSignature: Hashable {
     let heatmapRangeStart: TimeInterval
     let heatmapRangeEnd: TimeInterval
     let reposDigest: Int
+    let actionsDigest: Int
     let timeBucket: Int
+}
+
+struct RateLimitMenuSignature: Hashable {
+    let authMethod: AuthMethod?
+    let reset: Date?
+    let lastError: String?
+    let restResource: String?
+    let restRemaining: Int?
+    let restLimit: Int?
+    let restReset: Date?
+    let graphQLResource: String?
+    let graphQLRemaining: Int?
+    let graphQLLimit: Int?
+    let graphQLReset: Date?
+    let liveResources: [LiveRateLimitResourceSignature]
+    let endpointCooldowns: [EndpointCooldownSignature]
+    let cachedResponses: [CachedRateLimitSignature]
+    let activeLimits: [ActiveRateLimitSignature]
+
+    init(_ diagnostics: DiagnosticsSummary) {
+        self.init(RateLimitDisplayState(diagnostics: diagnostics))
+    }
+
+    init(_ state: RateLimitDisplayState) {
+        let diagnostics = state.diagnostics
+        self.authMethod = state.authMethod
+        self.reset = diagnostics.rateLimitReset
+        self.lastError = diagnostics.lastRateLimitError
+        self.restResource = diagnostics.restRateLimit?.resource
+        self.restRemaining = diagnostics.restRateLimit?.remaining
+        self.restLimit = diagnostics.restRateLimit?.limit
+        self.restReset = diagnostics.restRateLimit?.reset
+        self.graphQLResource = diagnostics.graphQLRateLimit?.resource
+        self.graphQLRemaining = diagnostics.graphQLRateLimit?.remaining
+        self.graphQLLimit = diagnostics.graphQLRateLimit?.limit
+        self.graphQLReset = diagnostics.graphQLRateLimit?.reset
+        self.liveResources = diagnostics.rateLimitResources?.resources
+            .map { resource, snapshot in
+                LiveRateLimitResourceSignature(resource: resource, snapshot: snapshot)
+            }
+            .sorted { $0.resource < $1.resource } ?? []
+        self.endpointCooldowns = diagnostics.endpointCooldowns.map(EndpointCooldownSignature.init)
+        self.cachedResponses = state.cacheSummary
+            .map(RateLimitStatusFormatter.observedRateLimitRows(from:))?
+            .map(CachedRateLimitSignature.init) ?? []
+        self.activeLimits = state.cacheSummary?.rateLimits.map(ActiveRateLimitSignature.init) ?? []
+    }
+}
+
+struct LiveRateLimitResourceSignature: Hashable {
+    let resource: String
+    let remaining: Int?
+    let limit: Int?
+    let reset: Date?
+
+    init(resource: String, snapshot: RateLimitSnapshot) {
+        self.resource = resource
+        self.remaining = snapshot.remaining
+        self.limit = snapshot.limit
+        self.reset = snapshot.reset
+    }
+}
+
+struct EndpointCooldownSignature: Hashable {
+    let endpoint: String
+    let repository: String?
+    let url: String
+    let retryAfter: Date
+
+    init(_ cooldown: EndpointCooldownSummary) {
+        self.endpoint = cooldown.endpoint
+        self.repository = cooldown.repository
+        self.url = cooldown.url
+        self.retryAfter = cooldown.retryAfter
+    }
+}
+
+struct CachedRateLimitSignature: Hashable {
+    let resource: String?
+    let remaining: Int?
+    let limit: Int?
+    let reset: Date?
+
+    init(_ row: RepoBarCachedResponseSummary) {
+        self.resource = row.rateLimitResource
+        self.remaining = row.rateLimitRemaining
+        self.limit = row.rateLimitLimit
+        self.reset = row.rateLimitReset
+    }
+}
+
+struct ActiveRateLimitSignature: Hashable {
+    let resource: String
+    let remaining: Int?
+    let reset: Date
+    let lastError: String?
+
+    init(_ row: RepoBarRateLimitSummary) {
+        self.resource = row.resource
+        self.remaining = row.remaining
+        self.reset = row.resetAt
+        self.lastError = row.lastError
+    }
+}
+
+struct ActionsSnapshotSignature: Hashable {
+    let org: String
+    let planTier: GitHubPlanTier
+    let isOrg: Bool
+    let minutesUsed: Int?
+    let minutesIncluded: Int?
+    let runnerCount: Int
+    let onlineRunners: Int
+    let busyRunners: Int
+    let displayedRunners: [DisplayedRunnerSignature]
+    let runnerScannedRepositoryCount: Int
+    let runnerTotalRepositoryCount: Int
+    let inProgressJobs: Int
+    let queuedJobs: Int
+    let runIDs: [Int]
+    let cacheSizeBytes: Int?
+    let cacheCount: Int?
+    let retentionDays: Int?
+
+    init(_ snapshot: ActionsOrgSnapshot) {
+        self.org = snapshot.org
+        self.planTier = snapshot.planTier
+        self.isOrg = snapshot.isOrg
+        self.minutesUsed = snapshot.minutesUsed
+        self.minutesIncluded = snapshot.minutesIncluded
+        self.runnerCount = snapshot.runners?.totalCount ?? 0
+        self.onlineRunners = snapshot.runners?.onlineCount ?? 0
+        self.busyRunners = snapshot.runners?.busyCount ?? 0
+        self.displayedRunners = snapshot.runners?.runners.prefix(10).map(DisplayedRunnerSignature.init) ?? []
+        self.runnerScannedRepositoryCount = snapshot.runners?.scannedRepositoryCount ?? 0
+        self.runnerTotalRepositoryCount = snapshot.runners?.totalRepositoryCount ?? 0
+        self.inProgressJobs = snapshot.queueStatus?.inProgressCount ?? 0
+        self.queuedJobs = snapshot.queueStatus?.queuedCount ?? 0
+        self.runIDs = snapshot.queueStatus?.runs.map(\.id) ?? []
+        self.cacheSizeBytes = snapshot.cacheUsage?.totalCachesSizeBytes
+        self.cacheCount = snapshot.cacheUsage?.totalCachesCount
+        self.retentionDays = snapshot.artifactRetention?.retentionDays
+    }
+
+    static func digest(for snapshots: [ActionsOrgSnapshot]) -> Int {
+        var hasher = Hasher()
+        snapshots.map(Self.init).forEach { hasher.combine($0) }
+        return hasher.finalize()
+    }
+}
+
+struct DisplayedRunnerSignature: Hashable {
+    let id: Int
+    let name: String
+    let os: String
+    let status: String
+    let busy: Bool
+    let labels: [String]
+
+    init(_ runner: RunnerSummary) {
+        self.id = runner.id
+        self.name = runner.name
+        self.os = runner.os
+        self.status = runner.status
+        self.busy = runner.busy
+        self.labels = Array(runner.labels.prefix(3))
+    }
 }
 
 struct AccountSignature: Hashable {
@@ -178,11 +347,6 @@ struct RepoSubmenuCacheEntry {
 struct RepoRecentCountSignature: Hashable {
     let commits: Int?
     let commitsDigest: Int?
-    let releases: Int?
-    let discussions: Int?
-    let tags: Int?
-    let branches: Int?
-    let contributors: Int?
 }
 
 struct RepoSubmenuSignature: Hashable {

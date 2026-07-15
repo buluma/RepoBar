@@ -4,13 +4,13 @@ import Testing
 
 struct RepoDetailCapabilityCacheTests {
     @Test
-    func discussionsCapabilityRespectsTTL() throws {
+    func `discussions capability respects TTL`() throws {
         let baseURL = FileManager.default.temporaryDirectory.appending(path: "repobar-capability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseURL) }
 
         let diskStore = RepoDetailCacheStore(fileManager: .default, baseURL: baseURL)
         var store = RepoDetailStore(diskStore: diskStore)
-        let apiHost = URL(string: "https://api.github.com")!
+        let apiHost = try #require(URL(string: "https://api.github.com"))
         let now = Date(timeIntervalSinceReferenceDate: 123_456)
 
         _ = store.updateDiscussionsEnabled(
@@ -41,12 +41,12 @@ struct RepoDetailCapabilityCacheTests {
     }
 
     @Test
-    func discussionsCapabilityPersistsAcrossStores() throws {
+    func `discussions capability persists across stores`() throws {
         let baseURL = FileManager.default.temporaryDirectory.appending(path: "repobar-capability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseURL) }
 
         let diskStore = RepoDetailCacheStore(fileManager: .default, baseURL: baseURL)
-        let apiHost = URL(string: "https://api.github.com")!
+        let apiHost = try #require(URL(string: "https://api.github.com"))
         let now = Date(timeIntervalSinceReferenceDate: 222_222)
 
         var writer = RepoDetailStore(diskStore: diskStore)

@@ -10,8 +10,8 @@ final class StatusBarMenuBuilder {
     let appState: AppState
     unowned let target: StatusBarMenuManager
     let signposter = OSSignposter(subsystem: "com.steipete.repobar", category: "menu")
-    var repoMenuItemCache: [String: NSMenuItem] = [:]
-    var repoSubmenuCache: [String: RepoSubmenuCacheEntry] = [:]
+    var repoMenuItemsByID: [String: NSMenuItem] = [:]
+    var repoSubmenusByFullName: [String: RepoSubmenuCacheEntry] = [:]
     var systemImageCache: [String: NSImage] = [:]
     let menuItemFactory = MenuItemViewFactory()
 
@@ -37,6 +37,7 @@ final class StatusBarMenuBuilder {
             settings: MenuSettingsSignature(settings: settings, selection: session.menuRepoSelection),
             hasLoadedRepositories: session.hasLoadedRepositories,
             rateLimitReset: session.rateLimitReset,
+            rateLimits: RateLimitMenuSignature(session.rateLimitDisplayState),
             lastError: session.lastError,
             contribution: ContributionSignature(
                 user: session.contributionUser,
@@ -54,6 +55,7 @@ final class StatusBarMenuBuilder {
             heatmapRangeStart: session.heatmapRange.start.timeIntervalSinceReferenceDate,
             heatmapRangeEnd: session.heatmapRange.end.timeIntervalSinceReferenceDate,
             reposDigest: RepoSignature.digest(for: repos),
+            actionsDigest: ActionsSnapshotSignature.digest(for: session.actionsOrgSnapshots),
             timeBucket: Int(now.timeIntervalSinceReferenceDate / 60)
         )
         return MainMenuPlan(repos: repos, signature: signature)
@@ -121,12 +123,14 @@ final class StatusBarMenuBuilder {
             }
         case .contributionHeader:
             guard case .loggedIn = session.account else { return [] }
+
             let hasContributionHeatmap = session.contributionHeatmap.isEmpty == false
             let shouldShowContributionHeader = settings.appearance.showContributionHeader
                 && (hasContributionHeatmap || session.contributionError == nil)
             let username = self.currentUsername()
             let displayName = self.currentDisplayName()
             guard shouldShowContributionHeader, let username, let displayName else { return [] }
+
             let header = ContributionHeaderView(
                 username: username,
                 displayName: displayName,
@@ -137,9 +141,10 @@ final class StatusBarMenuBuilder {
             .padding(.top, MenuStyle.headerTopPadding)
             .padding(.bottom, MenuStyle.headerBottomPadding)
             let submenu = self.contributionSubmenu(username: username, displayName: displayName)
-            return [self.viewItem(for: header, enabled: true, highlightable: true, submenu: submenu)]
+            return [self.viewItem(for: header, enabled: true, submenu: submenu)]
         case .statusBanner:
             guard case .loggedIn = session.account else { return [] }
+
             if let reset = session.rateLimitReset {
                 let banner = RateLimitBanner(reset: reset)
                     .padding(.horizontal, MenuStyle.bannerHorizontalPadding)
@@ -153,11 +158,21 @@ final class StatusBarMenuBuilder {
                 return [self.viewItem(for: banner, enabled: false)]
             }
             return []
+        case .rateLimits:
+            guard case .loggedIn = session.account else { return [] }
+
+            return [self.rateLimitsStatusMenuItem()]
+        case .actionsLimits:
+            guard case .loggedIn = session.account else { return [] }
+
+            return [self.actionsLimitsStatusMenuItem()]
         case .filters:
             let isLoggedIn = session.account.isLoggedIn
             let hasLocalFolder = session.settings.localProjects.rootPath?.isEmpty == false
             // Show filters if logged in with repos, OR if local folder is configured
             guard isLoggedIn ? session.hasLoadedRepositories : hasLocalFolder else { return [] }
+            guard isLoggedIn else { return [] }
+
             let filters = MenuRepoFiltersView(session: session)
                 .padding(.horizontal, 0)
                 .padding(.vertical, 0)
@@ -165,30 +180,26 @@ final class StatusBarMenuBuilder {
         case .repoList:
             let isLoggedIn = session.account.isLoggedIn
             let isLocalScope = session.menuRepoSelection.isLocalScope
+            let uniqueRepos = self.uniqueDisplayModels(repos)
             // Allow repo list for logged in users, or for local scope when logged out
             guard isLoggedIn || isLocalScope else { return [] }
+
             if isLoggedIn, !session.hasLoadedRepositories {
                 let loading = MenuLoadingRowView()
                     .padding(.horizontal, MenuStyle.sectionHorizontalPadding)
                     .padding(.vertical, MenuStyle.sectionVerticalPadding)
                 return [self.viewItem(for: loading, enabled: false)]
             }
-            if repos.isEmpty {
+            if uniqueRepos.isEmpty {
                 let (title, subtitle) = self.emptyStateMessage(for: session)
                 let emptyState = MenuEmptyStateView(title: title, subtitle: subtitle)
                     .padding(.horizontal, MenuStyle.sectionHorizontalPadding)
                     .padding(.vertical, MenuStyle.sectionVerticalPadding)
                 return [self.viewItem(for: emptyState, enabled: false)]
             }
-            // Deduplicate repos by id to prevent adding the same cached menu item twice
-            // (which would crash with "Item to be inserted into menu already is in another menu")
-            var usedRepoKeys: Set<String> = []
-            let uniqueRepos = repos.filter { repo in
-                if usedRepoKeys.contains(repo.id) { return false }
-                usedRepoKeys.insert(repo.id)
-                return true
-            }
             var items: [NSMenuItem] = []
+            var usedRepoIDs: Set<String> = []
+            var usedRepoFullNames: Set<String> = []
             for (index, repo) in uniqueRepos.enumerated() {
                 let isPinned = settings.repoList.pinnedRepositories.contains {
                     $0.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -200,10 +211,21 @@ final class StatusBarMenuBuilder {
                 if index < uniqueRepos.count - 1 {
                     items.append(self.repoCardSeparator())
                 }
+                usedRepoIDs.insert(repo.id)
+                usedRepoFullNames.insert(repo.title)
             }
-            self.repoMenuItemCache = self.repoMenuItemCache.filter { usedRepoKeys.contains($0.key) }
-            self.repoSubmenuCache = self.repoSubmenuCache.filter { usedRepoKeys.contains($0.key) }
+            self.repoMenuItemsByID = self.repoMenuItemsByID.filter { usedRepoIDs.contains($0.key) }
+            self.repoSubmenusByFullName = self.repoSubmenusByFullName.filter { usedRepoFullNames.contains($0.key) }
             return items
+        case .issueNavigator:
+            guard case .loggedIn = session.account else { return [] }
+
+            return [self.actionItem(
+                title: "Issue Navigator…",
+                action: #selector(self.target.openIssueNavigator),
+                keyEquivalent: "f",
+                systemImage: "rectangle.and.text.magnifyingglass"
+            )]
         case .preferences:
             return [self.actionItem(title: "Preferences…", action: #selector(self.target.openPreferences), keyEquivalent: ",")]
         case .about:
@@ -211,9 +233,17 @@ final class StatusBarMenuBuilder {
         case .restartToUpdate:
             guard case .loggedIn = session.account else { return [] }
             guard SparkleController.shared.updateStatus.isUpdateReady else { return [] }
+
             return [self.actionItem(title: "Restart to update", action: #selector(self.target.checkForUpdates))]
         case .quit:
             return [self.actionItem(title: "Quit RepoBar", action: #selector(self.target.quitApp), keyEquivalent: "q")]
+        }
+    }
+
+    private func uniqueDisplayModels(_ repos: [RepositoryDisplayModel]) -> [RepositoryDisplayModel] {
+        var seen: Set<String> = []
+        return repos.filter { repo in
+            seen.insert(repo.title.lowercased()).inserted
         }
     }
 
@@ -222,6 +252,7 @@ final class StatusBarMenuBuilder {
         var lastGroup: MainMenuItemGroup?
         for block in blocks {
             guard block.items.isEmpty == false else { continue }
+
             if let lastGroup, lastGroup != block.group, items.isEmpty == false {
                 let separator: NSMenuItem = block.group == .footer ? self.paddedSeparator() : .separator()
                 items.append(separator)
@@ -244,6 +275,7 @@ final class StatusBarMenuBuilder {
         for item in menu.items {
             guard let view = item.view,
                   let measuring = view as? MenuItemMeasuring else { continue }
+
             let height = measuring.measuredHeight(width: width)
             if abs(view.frame.size.height - height) > 0.5 || view.frame.size.width != width {
                 view.frame = NSRect(origin: .zero, size: NSSize(width: width, height: height))
@@ -299,7 +331,7 @@ final class StatusBarMenuBuilder {
             : session.repositories
         let sorted = RepositoryPipeline.apply(baseRepos, query: query)
         let displayIndex = session.menuDisplayIndex
-        let models = sorted.map { repo in
+        return sorted.map { repo in
             displayIndex[repo.fullName.lowercased()]
                 ?? RepositoryDisplayModel(
                     repo: repo,
@@ -307,7 +339,6 @@ final class StatusBarMenuBuilder {
                     now: now
                 )
         }
-        return models
     }
 
     private func localScopeViewModels(
@@ -328,6 +359,7 @@ final class StatusBarMenuBuilder {
                 models.append(model)
                 continue
             }
+
             models.append(existingModel)
         }
 
@@ -361,9 +393,8 @@ final class StatusBarMenuBuilder {
     }
 
     private func currentDisplayName() -> String? {
-        guard case let .loggedIn(user) = self.appState.session.account else { return nil }
-        let host = user.host.host ?? "github.com"
-        return "\(user.username)@\(host)"
+        if case let .loggedIn(user) = self.appState.session.account { return user.username }
+        return nil
     }
 
     var isLightAppearance: Bool {

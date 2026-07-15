@@ -5,6 +5,7 @@ extension AppState {
     /// Preloads the user's contribution heatmap so the header can render without remote images.
     func loadContributionHeatmapIfNeeded(for username: String) async {
         guard self.session.settings.appearance.showContributionHeader else { return }
+
         if self.session.contributionUser == username, !self.session.contributionHeatmap.isEmpty { return }
         let hasExisting = self.session.contributionUser == username && !self.session.contributionHeatmap.isEmpty
         if self.session.contributionIsLoading, self.session.contributionUser == username { return }
@@ -29,6 +30,7 @@ extension AppState {
                 self.session.contributionError = nil
                 self.session.contributionIsLoading = false
             }
+            await self.refreshRateLimitDiagnosticsForMenu()
             let cache = ContributionCache(
                 username: username,
                 expires: Date().addingTimeInterval(24 * 60 * 60),
@@ -44,6 +46,15 @@ extension AppState {
                 self.session.contributionError = error.userFacingMessage
                 self.session.contributionIsLoading = false
             }
+            await self.refreshRateLimitDiagnosticsForMenu()
+        }
+    }
+
+    private func refreshRateLimitDiagnosticsForMenu() async {
+        let diagnostics = await self.github.diagnostics()
+        await MainActor.run {
+            self.session.rateLimitDiagnostics = diagnostics
+            NotificationCenter.default.post(name: .menuDiagnosticsDidChange, object: nil)
         }
     }
 

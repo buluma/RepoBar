@@ -4,7 +4,7 @@ import Testing
 
 struct RepoDetailStoreTests {
     @Test
-    func cachePolicyMarksFreshAndStale() {
+    func `cache policy marks fresh and stale`() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let cache = RepoDetailCache(
             openPulls: 1,
@@ -37,13 +37,18 @@ struct RepoDetailStoreTests {
     }
 
     @Test
-    func storeUsesMemoryAfterDiskRemoval() throws {
+    func `default heatmap policy keeps stats stale ok for a day`() {
+        #expect(RepoDetailCacheConstants.heatmapTTL == 24 * 60 * 60)
+    }
+
+    @Test
+    func `store uses memory after disk removal`() throws {
         let baseURL = FileManager.default.temporaryDirectory.appending(path: "repobar-cache-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseURL) }
 
         let diskStore = RepoDetailCacheStore(fileManager: .default, baseURL: baseURL)
         var store = RepoDetailStore(diskStore: diskStore)
-        let apiHost = URL(string: "https://api.github.com")!
+        let apiHost = try #require(URL(string: "https://api.github.com"))
         let cache = RepoDetailCache(openPulls: 5)
 
         store.save(cache, apiHost: apiHost, owner: "steipete", name: "RepoBar")
@@ -59,13 +64,13 @@ struct RepoDetailStoreTests {
     }
 
     @Test
-    func clear_dropsMemoryAndDisk() throws {
+    func `clear drops memory and disk`() throws {
         let baseURL = FileManager.default.temporaryDirectory.appending(path: "repobar-cache-clear-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseURL) }
 
         let diskStore = RepoDetailCacheStore(fileManager: .default, baseURL: baseURL)
         var store = RepoDetailStore(diskStore: diskStore)
-        let apiHost = URL(string: "https://api.github.com")!
+        let apiHost = try #require(URL(string: "https://api.github.com"))
 
         store.save(RepoDetailCache(openPulls: 2), apiHost: apiHost, owner: "me", name: "Repo")
         #expect(store.load(apiHost: apiHost, owner: "me", name: "Repo").openPulls == 2)
@@ -76,7 +81,7 @@ struct RepoDetailStoreTests {
     }
 
     @Test
-    func load_usesDiskWhenMemoryEmpty() throws {
+    func `load uses disk when memory empty`() {
         let baseURL = FileManager.default.temporaryDirectory.appending(path: "repobar-cache-disk-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: baseURL) }
 

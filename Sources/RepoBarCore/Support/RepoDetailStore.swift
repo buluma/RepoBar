@@ -26,7 +26,7 @@ struct RepoDetailStore {
         self.diskStore.save(cache, apiHost: apiHost, owner: owner, name: name)
     }
 
-    // Capability cache: use TTL so newly-enabled discussions can reappear without a manual reset.
+    /// Capability cache: use TTL so newly-enabled discussions can reappear without a manual reset.
     mutating func discussionsEnabled(
         apiHost: URL,
         owner: String,
@@ -37,6 +37,7 @@ struct RepoDetailStore {
         let cache = self.load(apiHost: apiHost, owner: owner, name: name)
         guard let enabled = cache.discussionsEnabled, let checkedAt = cache.discussionsCheckedAt else { return nil }
         guard now.timeIntervalSince(checkedAt) <= ttl else { return nil }
+
         return enabled
     }
 
@@ -69,7 +70,7 @@ struct RepoDetailStore {
     }
 }
 
-struct RepoDetailCachePolicy: Sendable {
+struct RepoDetailCachePolicy {
     var openPullsTTL: TimeInterval
     var ciTTL: TimeInterval
     var activityTTL: TimeInterval
@@ -100,6 +101,7 @@ struct RepoDetailCachePolicy: Sendable {
     private func freshness(lastFetched: Date?, now: Date, ttl: TimeInterval) -> CacheFreshness {
         guard let lastFetched else { return .missing }
         guard now.timeIntervalSince(lastFetched) >= ttl else { return .fresh }
+
         return .stale
     }
 }

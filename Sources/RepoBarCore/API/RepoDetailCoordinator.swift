@@ -1,22 +1,35 @@
 import Foundation
 
+public struct RepositoryDetailOptions: Sendable {
+    public let fetchHeatmap: Bool
+
+    public init(fetchHeatmap: Bool = true) {
+        self.fetchHeatmap = fetchHeatmap
+    }
+
+    public static let `default` = RepositoryDetailOptions()
+}
+
 actor RepoDetailCoordinator {
     private var store: RepoDetailStore
     private let policy: RepoDetailCachePolicy
     private let restAPI: GitHubRestAPI
+    private let graphQL: GraphQLClient
     private let logger = RepoBarLogging.logger("repo-capability")
 
     init(
         restAPI: GitHubRestAPI,
+        graphQL: GraphQLClient,
         policy: RepoDetailCachePolicy,
         store: RepoDetailStore = RepoDetailStore()
     ) {
         self.restAPI = restAPI
+        self.graphQL = graphQL
         self.policy = policy
         self.store = store
     }
 
-    func fullRepository(owner: String, name: String) async throws -> Repository {
+    func fullRepository(owner: String, name: String, options: RepositoryDetailOptions = .default) async throws -> Repository {
         var accumulator = RepoErrorAccumulator()
 
         let details: RepoItem
@@ -49,26 +62,30 @@ actor RepoDetailCoordinator {
             didUpdateCache = true
         }
         let cacheState = self.policy.state(for: cache, now: now)
-        let cachedOpenPulls = cache.openPulls ?? 0
         let cachedCiDetails = cache.ciDetails ?? CIStatusDetails(status: .unknown, runCount: nil)
-        let cachedActivity = cache.latestActivity
-        let cachedActivityEvents = cache.activityEvents ?? []
+        let cachedActivitySnapshot = Self.cachedActivitySnapshot(
+            latest: cache.latestActivity,
+            events: cache.activityEvents ?? []
+        )
+        let cachedActivity = cachedActivitySnapshot.latest
+        let cachedActivityEvents = cachedActivitySnapshot.events
         let cachedTraffic = cache.traffic
         let cachedHeatmap = cache.heatmap ?? []
-        let cachedRelease = cache.latestRelease
 
         let shouldFetchPulls = cacheState.openPulls.needsRefresh
         let shouldFetchCI = cacheState.ci.needsRefresh
         let shouldFetchActivity = cacheState.activity.needsRefresh
         let shouldFetchTraffic = cacheState.traffic.needsRefresh
-        let shouldFetchHeatmap = cacheState.heatmap.needsRefresh
+        let shouldFetchHeatmap = options.fetchHeatmap && cacheState.heatmap.needsRefresh
         let shouldFetchRelease = cacheState.release.needsRefresh
+        let shouldFetchSummary = shouldFetchPulls || shouldFetchRelease
 
         // Run all expensive lookups in parallel; individual failures are folded into the accumulator.
         let restAPI = self.restAPI
-        async let openPullsResult: Result<Int, Error> = shouldFetchPulls
-            ? Self.capture { try await restAPI.openPullRequestCount(owner: resolvedOwner, name: resolvedName) }
-            : .success(cachedOpenPulls)
+        let graphQL = self.graphQL
+        async let summaryResult: Result<RepoSummary?, Error> = shouldFetchSummary
+            ? Self.capture { try await graphQL.repoSummary(owner: resolvedOwner, name: resolvedName) }
+            : .success(nil)
         async let ciResult: Result<CIStatusDetails, Error> = shouldFetchCI
             ? Self.capture { try await restAPI.ciStatus(owner: resolvedOwner, name: resolvedName) }
             : .success(cachedCiDetails)
@@ -81,24 +98,25 @@ actor RepoDetailCoordinator {
         async let heatmapResult: Result<[HeatmapCell], Error> = shouldFetchHeatmap
             ? Self.capture { try await restAPI.commitHeatmap(owner: resolvedOwner, name: resolvedName) }
             : .success(cachedHeatmap)
-        async let releaseResult: Result<Release?, Error> = shouldFetchRelease
-            ? Self.capture { try await restAPI.latestReleaseAny(owner: resolvedOwner, name: resolvedName) }
-            : .success(cachedRelease)
-
-        let openPulls: Int
-        switch await openPullsResult {
+        let summary: RepoSummary?
+        switch await summaryResult {
         case let .success(value):
-            openPulls = value
-            if shouldFetchPulls {
-                cache.openPulls = value
-                cache.openPullsFetchedAt = now
-                didUpdateCache = true
-            }
+            summary = value
         case let .failure(error):
             accumulator.absorb(error)
+            summary = nil
+        }
+
+        let openPulls: Int
+        if let summary, shouldFetchPulls {
+            openPulls = summary.openPulls
+            cache.openPulls = summary.openPulls
+            cache.openPullsFetchedAt = now
+            didUpdateCache = true
+        } else {
             openPulls = cache.openPulls ?? 0
         }
-        let issues = max(details.openIssuesCount - openPulls, 0)
+        let issues = summary?.openIssues ?? max(details.openIssuesCount - openPulls, 0)
 
         let ciDetails: CIStatusDetails?
         switch await ciResult {
@@ -163,16 +181,12 @@ actor RepoDetailCoordinator {
         }
 
         let releaseREST: Release?
-        switch await releaseResult {
-        case let .success(value):
-            releaseREST = value
-            if shouldFetchRelease {
-                cache.latestRelease = value
-                cache.releaseFetchedAt = now
-                didUpdateCache = true
-            }
-        case let .failure(error):
-            accumulator.absorb(error)
+        if let summary, shouldFetchRelease {
+            releaseREST = summary.release
+            cache.latestRelease = summary.release
+            cache.releaseFetchedAt = now
+            didUpdateCache = true
+        } else {
             releaseREST = cache.latestRelease
         }
 
@@ -195,6 +209,37 @@ actor RepoDetailCoordinator {
             error: accumulator.message,
             rateLimitedUntil: accumulator.rateLimit,
             detailCacheState: finalCacheState,
+            discussionsEnabled: cache.discussionsEnabled
+        )
+    }
+
+    func cachedRepositories(from items: [RepoItem], now: Date = Date()) async -> [Repository] {
+        let apiHost = await self.restAPI.apiHost()
+        return items.compactMap { self.cachedRepository(from: $0, apiHost: apiHost, now: now) }
+    }
+
+    private func cachedRepository(from item: RepoItem, apiHost: URL, now: Date) -> Repository? {
+        let cache = self.store.load(apiHost: apiHost, owner: item.owner.login, name: item.name)
+        guard let openPulls = cache.openPulls else { return nil }
+
+        let cacheState = self.policy.state(for: cache, now: now)
+        let ciDetails = cache.ciDetails
+        let activitySnapshot = Self.cachedActivitySnapshot(
+            latest: cache.latestActivity,
+            events: cache.activityEvents ?? []
+        )
+        return Repository.from(
+            item: item,
+            openPulls: openPulls,
+            issues: max(item.openIssuesCount - openPulls, 0),
+            ciStatus: ciDetails?.status ?? .unknown,
+            ciRunCount: ciDetails?.runCount,
+            latestRelease: cache.latestRelease,
+            latestActivity: activitySnapshot.latest,
+            activityEvents: activitySnapshot.events,
+            traffic: cache.traffic,
+            heatmap: cache.heatmap ?? [],
+            detailCacheState: cacheState,
             discussionsEnabled: cache.discussionsEnabled
         )
     }
@@ -251,6 +296,7 @@ actor RepoDetailCoordinator {
         var updatedCount = 0
         for item in items {
             guard let enabled = item.hasDiscussions else { continue }
+
             if self.store.updateDiscussionsEnabled(
                 apiHost: apiHost,
                 owner: item.owner.login,
@@ -268,5 +314,17 @@ actor RepoDetailCoordinator {
 
     private static func capture<T>(_ work: @escaping @Sendable () async throws -> T) async -> Result<T, Error> {
         do { return try await .success(work()) } catch { return .failure(error) }
+    }
+
+    static func cachedActivitySnapshot(latest: ActivityEvent?, events: [ActivityEvent]) -> ActivitySnapshot {
+        let sorted = events.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.date == rhs.element.date {
+                    return lhs.offset < rhs.offset
+                }
+                return lhs.element.date > rhs.element.date
+            }
+            .map(\.element)
+        return ActivitySnapshot(events: sorted, latest: sorted.first ?? latest)
     }
 }

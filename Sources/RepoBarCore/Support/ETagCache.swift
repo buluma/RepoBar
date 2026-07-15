@@ -1,59 +1,65 @@
 import Foundation
 
-/// Simple in-memory ETag cache keyed by URL string with LRU eviction.
+/// Simple in-memory ETag cache keyed by URL string.
 actor ETagCache {
-    /// Maximum number of entries to retain. Oldest entries are evicted when exceeded.
-    private let maxEntries: Int
+    private static let defaultMaxEntries = 512
 
+    private let maxEntries: Int
+    private let persistentStore: HTTPResponseDiskCache?
     private var store: [String: (etag: String, data: Data)] = [:]
-    /// Tracks access order for LRU eviction (most recent at end)
-    private var accessOrder: [String] = []
+    private var entryOrder: [String] = []
     private var rateLimitedUntil: Date?
 
-    init(maxEntries: Int = 200) {
-        self.maxEntries = maxEntries
+    init(maxEntries: Int = ETagCache.defaultMaxEntries, persistentStore: HTTPResponseDiskCache? = nil) {
+        self.maxEntries = max(0, maxEntries)
+        self.persistentStore = persistentStore
+    }
+
+    static func persistent(maxEntries: Int = ETagCache.defaultMaxEntries) -> ETagCache {
+        ETagCache(maxEntries: maxEntries, persistentStore: HTTPResponseDiskCache.standard())
+    }
+
+    static func persistent(accountID: String?, maxEntries: Int = ETagCache.defaultMaxEntries) -> ETagCache {
+        ETagCache(maxEntries: maxEntries, persistentStore: HTTPResponseDiskCache.scoped(accountID: accountID))
     }
 
     func cached(for url: URL) -> (etag: String, data: Data)? {
         let key = url.absoluteString
-        guard let value = self.store[key] else { return nil }
-        // Move to end of access order (most recently used)
-        if let index = self.accessOrder.firstIndex(of: key) {
-            self.accessOrder.remove(at: index)
-            self.accessOrder.append(key)
+        if let cached = self.store[key] {
+            self.touch(key)
+            return cached
         }
+
+        guard let cached = self.persistentStore?.cached(url: url) else { return nil }
+
+        let value = (cached.etag, cached.data)
+        self.store[key] = value
+        self.touch(key)
+        self.evictIfNeeded()
         return value
     }
 
-    func save(url: URL, etag: String?, data: Data) {
+    func save(url: URL, etag: String?, data: Data, response: HTTPURLResponse? = nil) {
         guard let etag else { return }
+
         let key = url.absoluteString
-        let isNewKey = self.store[key] == nil
-
-        if isNewKey {
-            // Only evict when inserting a new key
-            while self.store.count >= self.maxEntries, let oldest = self.accessOrder.first {
-                self.accessOrder.removeFirst()
-                self.store.removeValue(forKey: oldest)
-            }
-            self.accessOrder.append(key)
-        } else {
-            // Update existing key - move to end of access order
-            if let index = self.accessOrder.firstIndex(of: key) {
-                self.accessOrder.remove(at: index)
-                self.accessOrder.append(key)
-            }
+        if self.maxEntries > 0 {
+            self.store[key] = (etag, data)
+            self.touch(key)
+            self.evictIfNeeded()
         }
-
-        self.store[key] = (etag, data)
+        self.persistentStore?.save(url: url, etag: etag, data: data, response: response)
     }
 
     func setRateLimitReset(date: Date) {
         self.rateLimitedUntil = date
+        self.persistentStore?.setRateLimitReset(date: date)
     }
 
     func rateLimitUntil(now: Date = Date()) -> Date? {
-        guard let until = self.rateLimitedUntil else { return nil }
+        let until = self.rateLimitedUntil ?? self.persistentStore?.rateLimitUntil(now: now)
+        guard let until else { return nil }
+
         if until <= now {
             self.rateLimitedUntil = nil
             return nil
@@ -63,16 +69,30 @@ actor ETagCache {
 
     func isRateLimited(now: Date = Date()) -> Bool {
         guard let until = self.rateLimitUntil(now: now) else { return false }
+
         return until > now
     }
 
     func clear() {
         self.store.removeAll()
-        self.accessOrder.removeAll()
+        self.entryOrder.removeAll()
         self.rateLimitedUntil = nil
+        self.persistentStore?.clear()
     }
 
     func count() -> Int {
-        self.store.count
+        self.persistentStore?.count() ?? self.store.count
+    }
+
+    private func touch(_ key: String) {
+        self.entryOrder.removeAll { $0 == key }
+        self.entryOrder.append(key)
+    }
+
+    private func evictIfNeeded() {
+        while self.store.count > self.maxEntries, let oldest = self.entryOrder.first {
+            self.entryOrder.removeFirst()
+            self.store[oldest] = nil
+        }
     }
 }

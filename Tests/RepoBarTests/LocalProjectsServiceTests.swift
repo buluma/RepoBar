@@ -4,7 +4,7 @@ import Testing
 
 struct LocalProjectsServiceTests {
     @Test
-    func pathFormatter_abbreviatesHome() {
+    func `path formatter abbreviates home`() {
         let user = NSUserName()
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let homeResolved = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
@@ -17,7 +17,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func localRepoStatus_detailsAndAutoSyncEligibility() {
+    func `local repo status details and auto sync eligibility`() {
         let status = LocalRepoStatus(
             path: URL(fileURLWithPath: "/tmp/repo"),
             name: "repo",
@@ -47,7 +47,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func snapshot_discoversRepos_and_parsesRemoteFormats() async throws {
+    func `snapshot discovers repos and parses remote formats`() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -76,7 +76,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func snapshot_discoveredRepoCount_includesAllDiscoveredEvenWhenFiltered() async throws {
+    func `snapshot discovered repo count includes all discovered even when filtered`() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -102,7 +102,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func discoverRepoRoots_acceptsFileReferenceURLs() async throws {
+    func `discover repo roots accepts file reference UR ls`() throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -118,7 +118,30 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func snapshot_autoSync_fastForwardPullsBehindRepos() async throws {
+    func `discover repo roots follows symlinked directories once`() throws {
+        let root = try makeTempDirectory()
+        let outside = try makeTempDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let targetRepo = outside.appendingPathComponent("target-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: targetRepo, withIntermediateDirectories: true)
+        try initializeRepo(at: targetRepo, origin: "git@github.com:foo/target-repo.git")
+
+        let linkedRepo = root.appendingPathComponent("linked-repo", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkedRepo, withDestinationURL: targetRepo)
+        let loop = root.appendingPathComponent("loop", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: loop, withDestinationURL: root)
+
+        let roots = LocalProjectsService().discoverRepoRoots(rootURL: root, maxDepth: 2)
+
+        #expect(roots.map(\.lastPathComponent) == ["linked-repo"])
+    }
+
+    @Test
+    func `snapshot auto sync fast forward pulls behind repos`() async throws {
         let base = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: base) }
 
@@ -164,7 +187,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func localRepoIndex_matchesCaseInsensitiveNamesAndFullNames() {
+    func `local repo index matches case insensitive names and full names`() {
         let status = LocalRepoStatus(
             path: URL(fileURLWithPath: "/tmp/CodexBar"),
             name: "CodexBar",
@@ -183,7 +206,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func localRepoIndex_prefersHigherHierarchyForDuplicateFullNames() {
+    func `local repo index prefers higher hierarchy for duplicate full names`() {
         let worktree = LocalRepoStatus(
             path: URL(fileURLWithPath: "/tmp/Repo/.work/feature"),
             name: "Repo",
@@ -212,7 +235,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func localRepoIndex_prefersPreferredPath() {
+    func `local repo index prefers preferred path`() {
         let primary = LocalRepoStatus(
             path: URL(fileURLWithPath: "/tmp/repo-a"),
             name: "Repo",
@@ -243,7 +266,36 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func snapshot_includesWorktreeNameForWorktrees() async throws {
+    func `local repo index matches containing paths`() {
+        let root = LocalRepoStatus(
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            name: "repo",
+            fullName: "owner/repo",
+            branch: "main",
+            isClean: true,
+            aheadCount: 0,
+            behindCount: 0,
+            syncState: .synced
+        )
+        let worktree = LocalRepoStatus(
+            path: URL(fileURLWithPath: "/tmp/repo/.work/feature"),
+            name: "repo",
+            fullName: "owner/repo",
+            branch: "feature",
+            isClean: true,
+            aheadCount: 0,
+            behindCount: 0,
+            syncState: .synced,
+            worktreeName: "feature"
+        )
+        let index = LocalRepoIndex(statuses: [root, worktree])
+
+        #expect(index.status(containingPath: "/tmp/repo/Sources/File.swift")?.path.path == root.path.path)
+        #expect(index.status(containingPath: "/tmp/repo/.work/feature/Sources/File.swift")?.path.path == worktree.path.path)
+    }
+
+    @Test
+    func `snapshot includes worktree name for worktrees`() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -268,7 +320,7 @@ struct LocalProjectsServiceTests {
     }
 
     @Test
-    func snapshot_limitsDirtyFiles() async throws {
+    func `snapshot limits dirty files`() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 

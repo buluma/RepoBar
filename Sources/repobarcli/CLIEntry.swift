@@ -29,6 +29,7 @@ enum RepoBarCLI {
         guard let type = commandRegistry[name] else {
             throw CLIError.unknownCommand(name)
         }
+
         var command = type.init()
         try command.bind(invocation.parsedValues)
         return command
@@ -64,12 +65,27 @@ enum RepoBarCLI {
         UnpinCommand.commandName: UnpinCommand.self,
         HideCommand.commandName: HideCommand.self,
         ShowCommand.commandName: ShowCommand.self,
+        ArchivesListCommand.commandName: ArchivesListCommand.self,
+        ArchivesStatusCommand.commandName: ArchivesStatusCommand.self,
+        ArchivesValidateCommand.commandName: ArchivesValidateCommand.self,
+        ArchivesUpdateCommand.commandName: ArchivesUpdateCommand.self,
+        ArchivesAddCommand.commandName: ArchivesAddCommand.self,
+        ArchivesRemoveCommand.commandName: ArchivesRemoveCommand.self,
+        ArchivesEnableCommand.commandName: ArchivesEnableCommand.self,
+        ArchivesDisableCommand.commandName: ArchivesDisableCommand.self,
+        RateLimitsCommand.commandName: RateLimitsCommand.self,
+        ReferenceTranslateCommand.commandName: ReferenceTranslateCommand.self,
+        CacheStatusCommand.commandName: CacheStatusCommand.self,
+        CacheClearCommand.commandName: CacheClearCommand.self,
         SettingsShowCommand.commandName: SettingsShowCommand.self,
         SettingsSetCommand.commandName: SettingsSetCommand.self,
         LoginCommand.commandName: LoginCommand.self,
         LogoutCommand.commandName: LogoutCommand.self,
         ImportGHTokenCommand.commandName: ImportGHTokenCommand.self,
-        StatusCommand.commandName: StatusCommand.self
+        StatusCommand.commandName: StatusCommand.self,
+        AccountsListCommand.commandName: AccountsListCommand.self,
+        AccountsUseCommand.commandName: AccountsUseCommand.self,
+        AccountsRemoveCommand.commandName: AccountsRemoveCommand.self
     ]
 
     private static func handleError(_ error: Error) {

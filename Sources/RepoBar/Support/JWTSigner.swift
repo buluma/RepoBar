@@ -31,6 +31,7 @@ enum JWTSigner {
         ].joined(separator: ".")
 
         guard let messageData = signingInput.data(using: .utf8) else { throw Error.signFailed }
+
         var error: Unmanaged<CFError>?
         guard let signature = SecKeyCreateSignature(
             secKey,
@@ -40,8 +41,7 @@ enum JWTSigner {
         ) as Data?
         else { throw error?.takeRetainedValue() ?? Error.signFailed }
 
-        let jwt = signingInput + "." + signature.base64URLEncodedString()
-        return jwt
+        return signingInput + "." + signature.base64URLEncodedString()
     }
 
     private static func derData(fromPEM pem: String) throws -> Data {
@@ -52,6 +52,7 @@ enum JWTSigner {
             .replacingOccurrences(of: "\n", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = Data(base64Encoded: stripped) else { throw Error.invalidPEM }
+
         return data
     }
 }

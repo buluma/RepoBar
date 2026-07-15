@@ -25,7 +25,7 @@ struct LocalSyncCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         let result = try LocalGitService().smartSync(at: resolved.path)
 
@@ -74,7 +74,7 @@ struct LocalRebaseCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         try LocalGitService().rebaseOntoUpstream(at: resolved.path)
 
@@ -123,7 +123,7 @@ struct LocalResetCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
 
         if self.assumeYes == false {
@@ -173,7 +173,7 @@ struct LocalBranchesCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         let snapshot = try LocalGitService().branchDetails(at: resolved.path)
 
@@ -220,7 +220,7 @@ struct WorktreesCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         let worktrees = try LocalGitService().worktrees(at: resolved.path)
 
@@ -262,7 +262,7 @@ struct OpenFinderCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         try openPath(resolved.path.path)
         print("Opened Finder at \(resolved.displayName)")
@@ -288,7 +288,7 @@ struct OpenTerminalCommand: CommanderRunnableCommand {
 
     mutating func run() async throws {
         let target = try requireLocalTarget(self.target)
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let resolved = try await resolveLocalRepoTarget(target, settings: settings)
         try openTerminal(at: resolved.path, settings: settings)
         print("Opened terminal at \(resolved.displayName)")
@@ -329,9 +329,8 @@ struct CheckoutCommand: CommanderRunnableCommand {
     }
 
     mutating func run() async throws {
-        let repoName = try requireRepoName(self.repoName)
-        let (owner, name) = try parseRepoName(repoName)
-        let settingsStore = SettingsStore()
+        let repo = try requireRepoIdentifier(self.repoName)
+        let settingsStore = cliSettingsStore()
         var settings = settingsStore.load()
         let host = settings.enterpriseHost ?? settings.githubHost
 
@@ -346,19 +345,19 @@ struct CheckoutCommand: CommanderRunnableCommand {
         } else {
             let expandedRoot = PathFormatter.expandTilde(rootPath ?? "")
             let rootURL = URL(fileURLWithPath: expandedRoot, isDirectory: true)
-            destinationURL = rootURL.appendingPathComponent(name, isDirectory: true)
+            destinationURL = rootURL.appendingPathComponent(repo.name, isDirectory: true)
         }
 
         if FileManager.default.fileExists(atPath: destinationURL.path) {
             throw ValidationError("Destination already exists: \(PathFormatter.displayString(destinationURL.path))")
         }
 
-        var remoteURL = host.appendingPathComponent("\(owner)/\(name)")
+        var remoteURL = host.appendingPathComponent(repo.fullName)
         remoteURL.appendPathExtension("git")
 
         try LocalGitService().cloneRepo(remoteURL: remoteURL, to: destinationURL)
 
-        settings.localProjects.preferredLocalPathsByFullName[repoName] = destinationURL.path
+        settings.localProjects.preferredLocalPathsByFullName[repo.fullName] = destinationURL.path
         settingsStore.save(settings)
 
         if self.openAfter {
@@ -367,7 +366,7 @@ struct CheckoutCommand: CommanderRunnableCommand {
 
         if self.output.jsonOutput {
             let output = CheckoutOutput(
-                repo: repoName,
+                repo: repo.fullName,
                 destination: destinationURL.path,
                 opened: self.openAfter
             )
@@ -375,6 +374,6 @@ struct CheckoutCommand: CommanderRunnableCommand {
             return
         }
 
-        print("Checked out \(repoName) → \(PathFormatter.displayString(destinationURL.path))")
+        print("Checked out \(repo.fullName) → \(PathFormatter.displayString(destinationURL.path))")
     }
 }

@@ -5,6 +5,7 @@ extension AppState {
     func localMatchRepoNamesForLocalProjects(repos: [Repository], includePinned: Bool) -> Set<String> {
         var names = Set(repos.map(\.name))
         guard includePinned else { return names }
+
         let pinned = self.session.settings.repoList.pinnedRepositories
         for fullName in pinned {
             if let last = fullName.split(separator: "/").last {
@@ -68,11 +69,8 @@ extension AppState {
     }
 
     func addPinned(_ fullName: String) async {
-        let normalized = self.normalizedFullName(fullName)
-        guard !self.session.settings.repoList.pinnedRepositories.contains(where: {
-            self.normalizedFullName($0) == normalized
-        }) else { return }
-        self.session.settings.repoList.pinnedRepositories.append(fullName)
+        guard self.session.settings.repoList.pinRepository(fullName) else { return }
+
         self.settingsStore.save(self.session.settings)
         await self.refresh()
     }
@@ -91,6 +89,7 @@ extension AppState {
         guard !self.session.settings.repoList.hiddenRepositories.contains(where: {
             self.normalizedFullName($0) == normalized
         }) else { return }
+
         self.session.settings.repoList.hiddenRepositories.append(fullName)
         // If hidden, also unpin to avoid stale pin list.
         self.session.settings.repoList.pinnedRepositories.removeAll {
@@ -117,6 +116,7 @@ extension AppState {
         // Always trim first to avoid storing whitespace variants.
         let trimmed = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
         let normalized = self.normalizedFullName(trimmed)
 
         // Remove from both buckets before re-adding.
@@ -150,9 +150,13 @@ extension AppState {
     }
 
     nonisolated static func selectVisible(all repos: [Repository], options: VisibleSelectionOptions) -> [Repository] {
+        let uniqueRepos = RepositoryUniquing.byFullName(repos)
         let pinnedSet = Set(options.pinned.map { $0.lowercased() })
         let hiddenSet = Set(options.hidden.map { $0.lowercased() })
-        let filtered = repos.filter { !hiddenSet.contains($0.fullName.lowercased()) }
+        let filtered = uniqueRepos.filter {
+            let key = $0.fullName.lowercased()
+            return !hiddenSet.contains(key) || pinnedSet.contains(key)
+        }
         let visible = RepositoryFilter.apply(
             filtered,
             includeForks: options.includeForks,
@@ -178,6 +182,36 @@ extension AppState {
     }
 
     private func normalizedFullName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+extension RepoListSettings {
+    @discardableResult
+    mutating func pinRepository(_ fullName: String) -> Bool {
+        let normalized = Self.normalizedFullName(fullName)
+        let alreadyPinned = self.pinnedRepositories.contains {
+            Self.normalizedFullName($0) == normalized
+        }
+        let isHidden = self.hiddenRepositories.contains {
+            Self.normalizedFullName($0) == normalized
+        }
+        // Nothing to do only when it is already pinned and not hidden. If it is
+        // already pinned but somehow still hidden, fall through to repair that.
+        guard !alreadyPinned || isHidden else { return false }
+
+        if !alreadyPinned {
+            self.pinnedRepositories.append(fullName)
+        }
+        // If pinned, also unhide to keep pinned and hidden mutually exclusive.
+        // This mirrors hide(), which removes the repo from the pinned list.
+        self.hiddenRepositories.removeAll {
+            Self.normalizedFullName($0) == normalized
+        }
+        return true
+    }
+
+    private static func normalizedFullName(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

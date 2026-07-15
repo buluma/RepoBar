@@ -126,6 +126,7 @@ struct DisplaySettingsView: View {
             },
             set: { isVisible in
                 guard item.isRequired == false else { return }
+
                 var customization = self.session.settings.menuCustomization
                 if isVisible {
                     customization.hiddenMainMenuItems.remove(item)
@@ -156,6 +157,11 @@ struct DisplaySettingsView: View {
 
     private func updateCustomization(_ customization: MenuCustomization) {
         self.session.settings.menuCustomization = customization
+        self.session.settings.actions.showActionsInMenu = !customization.hiddenMainMenuItems.contains(.actionsLimits)
+        if customization.hiddenMainMenuItems.contains(.actionsLimits) {
+            self.session.actionsOrgSnapshots = []
+            NotificationCenter.default.post(name: .menuRepositoriesDidChange, object: nil)
+        }
         self.appState.persistSettings()
         self.appState.requestRefresh()
     }

@@ -1,15 +1,35 @@
 import Foundation
 
-struct ActivitySnapshot: Sendable {
+private let repositoryTopicsAcceptHeader = "application/vnd.github.mercy-preview+json"
+
+struct ActivitySnapshot {
     let events: [ActivityEvent]
     let latest: ActivityEvent?
 }
 
-struct GitHubRestAPI: Sendable {
+struct GitHubRestAPI {
     let apiHost: @Sendable () async -> URL
     let tokenProvider: @Sendable () async throws -> String
     let requestRunner: GitHubRequestRunner
     let diag: DiagnosticsLogger
+    let responseDiskCache: HTTPResponseDiskCache?
+    let dataLoader: HTTPDataLoader
+
+    init(
+        apiHost: @escaping @Sendable () async -> URL,
+        tokenProvider: @escaping @Sendable () async throws -> String,
+        requestRunner: GitHubRequestRunner,
+        diag: DiagnosticsLogger,
+        responseDiskCache: HTTPResponseDiskCache? = HTTPResponseDiskCache.standard(),
+        dataLoader: HTTPDataLoader = .live
+    ) {
+        self.apiHost = apiHost
+        self.tokenProvider = tokenProvider
+        self.requestRunner = requestRunner
+        self.diag = diag
+        self.responseDiskCache = responseDiskCache
+        self.dataLoader = dataLoader
+    }
 
     static func userReposQueryItems() -> [URLQueryItem] {
         [
@@ -25,7 +45,7 @@ struct GitHubRestAPI: Sendable {
         let baseURL = await apiHost()
         var components = URLComponents(url: baseURL.appending(path: "/user/repos"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "per_page", value: "\(limit)")] + Self.userReposQueryItems()
-        let (data, _) = try await authorizedGet(url: components.url!, token: token)
+        let (data, _) = try await authorizedGet(url: components.url!, token: token, headers: ["Accept": repositoryTopicsAcceptHeader])
         return try GitHubDecoding.decode([RepoItem].self, from: data)
     }
 
@@ -35,16 +55,103 @@ struct GitHubRestAPI: Sendable {
             path: "/user/repos",
             queryItems: Self.userReposQueryItems(),
             limit: limit,
+            headers: ["Accept": repositoryTopicsAcceptHeader],
             decode: { try GitHubDecoding.decode([RepoItem].self, from: $0) }
         )
+    }
+
+    func cachedUserReposPaginated(limit: Int?) async throws -> [RepoItem] {
+        guard let cache = self.responseDiskCache else { return [] }
+
+        let pageSize = 100
+        let baseURL = await apiHost()
+        var collected: [RepoItem] = []
+        var page = 1
+
+        while true {
+            var components = URLComponents(url: baseURL.appending(path: "/user/repos"), resolvingAgainstBaseURL: false)!
+            var items = Self.userReposQueryItems()
+            items.append(URLQueryItem(name: "per_page", value: "\(pageSize)"))
+            items.append(URLQueryItem(name: "page", value: "\(page)"))
+            components.queryItems = items
+
+            guard let cached = cache.cached(url: components.url!) else { break }
+
+            let pageItems = try GitHubDecoding.decode([RepoItem].self, from: cached.data)
+            collected.append(contentsOf: pageItems)
+
+            if let limit, collected.count >= limit {
+                break
+            }
+            if pageItems.count < pageSize {
+                break
+            }
+            page += 1
+        }
+
+        if let limit {
+            return Array(collected.prefix(limit))
+        }
+        return collected
     }
 
     func fetchCurrentUser() async throws -> CurrentUser {
         let token = try await tokenProvider()
         let baseURL = await self.apiHost()
         let url = baseURL.appending(path: "/user")
-        let (data, _) = try await authorizedGet(url: url, token: token)
+        let (data, _) = try await authorizedGet(url: url, token: token, useETag: false)
         return try GitHubDecoding.decode(CurrentUser.self, from: data)
+    }
+
+    func fetchUserOrganizations() async throws -> [String] {
+        let token = try await tokenProvider()
+        let baseURL = await self.apiHost()
+        let (data, _) = try await authorizedGet(
+            url: baseURL.appending(path: "/user/orgs"),
+            token: token,
+            allowedStatuses: [200, 304],
+            useETag: false
+        )
+        let orgs = try GitHubDecoding.decode([UserOrganization].self, from: data)
+        return orgs.map(\.login)
+    }
+
+    func fetchOrganizationPlan(org: String) async throws -> String? {
+        let token = try await tokenProvider()
+        let baseURL = await self.apiHost()
+        let (data, _) = try await authorizedGet(
+            url: baseURL.appending(path: "/orgs/\(org)"),
+            token: token,
+            allowedStatuses: [200, 304, 403, 404],
+            useETag: false
+        )
+        let detail = try? GitHubDecoding.decode(OrganizationDetail.self, from: data)
+        return detail?.plan?.name
+    }
+
+    func rateLimitResources() async throws -> RateLimitResourcesSnapshot {
+        let token = try await tokenProvider()
+        let baseURL = await apiHost()
+        let now = Date()
+        let (data, _) = try await authorizedGet(
+            url: baseURL.appending(path: "/rate_limit"),
+            token: token,
+            useETag: false
+        )
+        let decoded = try GitHubDecoding.decode(RateLimitResponse.self, from: data)
+        let resources = decoded.resources.mapValues { resource in
+            RateLimitSnapshot(
+                resource: resource.resource,
+                limit: resource.limit,
+                remaining: resource.remaining,
+                used: resource.used,
+                reset: Date(timeIntervalSince1970: TimeInterval(resource.reset)),
+                fetchedAt: now
+            )
+        }
+        let snapshot = RateLimitResourcesSnapshot(fetchedAt: now, resources: resources)
+        await self.requestRunner.recordRateLimitResources(snapshot)
+        return snapshot
     }
 
     func searchRepositories(matching query: String) async throws -> [RepoItem] {
@@ -59,9 +166,108 @@ struct GitHubRestAPI: Sendable {
             URLQueryItem(name: "q", value: Self.repoSearchQuery(from: trimmed)),
             URLQueryItem(name: "per_page", value: "8")
         ]
-        let (data, _) = try await authorizedGet(url: components.url!, token: token)
+        let (data, _) = try await authorizedGet(url: components.url!, token: token, headers: ["Accept": repositoryTopicsAcceptHeader])
         let decoded = try GitHubDecoding.decode(SearchResponse.self, from: data)
         return decoded.items
+    }
+
+    func searchIssueReferences(
+        matching query: String,
+        repositoryFullName: String?,
+        includeIssues: Bool,
+        includePullRequests: Bool,
+        limit: Int
+    ) async throws -> [GitHubReferenceMatch] {
+        guard includeIssues || includePullRequests else { return [] }
+
+        let token = try await tokenProvider()
+        let baseURL = await apiHost()
+        var components = URLComponents(
+            url: baseURL.appending(path: "/search/issues"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(
+                name: "q",
+                value: Self.issueReferenceSearchQuery(
+                    from: query,
+                    repositoryFullName: repositoryFullName,
+                    includeIssues: includeIssues,
+                    includePullRequests: includePullRequests
+                )
+            ),
+            URLQueryItem(name: "sort", value: "updated"),
+            URLQueryItem(name: "order", value: "desc"),
+            URLQueryItem(name: "per_page", value: "\(max(1, min(limit, 100)))")
+        ]
+        let (data, _) = try await authorizedGet(url: components.url!, token: token)
+        let decoded = try GitHubDecoding.decode(IssueReferenceSearchResponse.self, from: data)
+        return decoded.items.compactMap { $0.match() }
+    }
+
+    func recentIssueReferences(
+        filter: String,
+        includeIssues: Bool,
+        includePullRequests: Bool,
+        limit: Int
+    ) async throws -> [GitHubReferenceMatch] {
+        guard includeIssues || includePullRequests else { return [] }
+
+        let token = try await tokenProvider()
+        let baseURL = await apiHost()
+        var components = URLComponents(
+            url: baseURL.appending(path: "/issues"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "filter", value: filter),
+            URLQueryItem(name: "state", value: "open"),
+            URLQueryItem(name: "sort", value: "updated"),
+            URLQueryItem(name: "direction", value: "desc"),
+            URLQueryItem(name: "per_page", value: "\(max(1, min(limit, 100)))")
+        ]
+        let (data, _) = try await authorizedGet(url: components.url!, token: token)
+        let decoded = try GitHubDecoding.decode([IssueReferenceSearchItem].self, from: data)
+        return decoded.compactMap { item in
+            guard let match = item.match() else { return nil }
+
+            switch match.kind {
+            case .issue:
+                return includeIssues ? match : nil
+            case .pullRequest:
+                return includePullRequests ? match : nil
+            case .commit, .workflowRun:
+                return nil
+            }
+        }
+    }
+
+    private static func issueReferenceSearchQuery(
+        from query: String,
+        repositoryFullName: String?,
+        includeIssues: Bool,
+        includePullRequests: Bool
+    ) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        if trimmed.isEmpty == false {
+            parts.append(trimmed)
+        }
+        if let repositoryFullName, repositoryFullName.isEmpty == false {
+            parts.append("repo:\(repositoryFullName)")
+        }
+        switch (includeIssues, includePullRequests) {
+        case (true, false):
+            parts.append("is:issue")
+        case (false, true):
+            parts.append("is:pr")
+        default:
+            break
+        }
+        if parts.isEmpty {
+            parts.append("is:open")
+        }
+        return parts.joined(separator: " ")
     }
 
     private static func repoSearchQuery(from query: String) -> String {
@@ -103,8 +309,21 @@ struct GitHubRestAPI: Sendable {
         let token = try await tokenProvider()
         let baseURL = await self.apiHost()
         let url = baseURL.appending(path: "/repos/\(owner)/\(name)")
-        let (data, _) = try await authorizedGet(url: url, token: token)
+        let data: Data
+        do {
+            (data, _) = try await self.authorizedGet(url: url, token: token)
+        } catch let error as GitHubAPIError {
+            if case .badStatus(404, _) = error {
+                throw GitHubAPIError.badStatus(code: 404, message: Self.repoNotVisibleMessage(owner: owner, name: name))
+            }
+            throw error
+        }
         return try GitHubDecoding.decode(RepoItem.self, from: data)
+    }
+
+    static func repoNotVisibleMessage(owner: String, name: String) -> String {
+        "\(owner)/\(name) was not found or is not visible to RepoBar's token. " +
+            "For private organization repositories, install the RepoBar GitHub App on that organization/repository or sign in with a PAT that has repo access."
     }
 
     func ciStatus(owner: String, name: String) async throws -> CIStatusDetails {
@@ -121,6 +340,7 @@ struct GitHubRestAPI: Sendable {
         let (data, _) = try await authorizedGet(url: components.url!, token: token)
         let runs = try GitHubDecoding.decode(ActionsRunsResponse.self, from: data)
         guard let run = runs.workflowRuns.first else { return CIStatusDetails(status: .unknown, runCount: runs.totalCount) }
+
         let status = GitHubStatusMapper.ciStatus(fromStatus: run.status, conclusion: run.conclusion)
         return CIStatusDetails(status: status, runCount: runs.totalCount)
     }
@@ -136,11 +356,29 @@ struct GitHubRestAPI: Sendable {
         components.queryItems = [URLQueryItem(name: "per_page", value: "30")]
         let (data, _) = try await authorizedGet(url: components.url!, token: token)
         let events = try GitHubDecoding.decode([RepoEvent].self, from: data)
-        let mapped = events.map { event in
+        return Self.activitySnapshot(from: events, owner: owner, name: name, webHost: webHost, limit: limit)
+    }
+
+    static func activitySnapshot(
+        from events: [RepoEvent],
+        owner: String,
+        name: String,
+        webHost: URL,
+        limit: Int
+    ) -> ActivitySnapshot {
+        let sorted = events.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.createdAt == rhs.element.createdAt {
+                    return lhs.offset < rhs.offset
+                }
+                return lhs.element.createdAt > rhs.element.createdAt
+            }
+            .map(\.element)
+        let mapped = sorted.map { event in
             (event: event, activity: event.activityEvent(owner: owner, name: name, webHost: webHost))
         }
         let limited = Array(mapped.prefix(max(limit, 0)))
-        let preferred = limited.first(where: { $0.event.hasRichPayload })?.activity
+        let preferred = limited.first(where: \.event.hasRichPayload)?.activity
         return ActivitySnapshot(
             events: limited.map(\.activity),
             latest: preferred ?? limited.first?.activity
@@ -234,7 +472,7 @@ struct GitHubRestAPI: Sendable {
         return data
     }
 
-    func openPullRequestCount(owner: String, name: String) async throws -> Int {
+    func openPullRequestCount(owner: String, name: String) async throws -> Int? {
         let token = try await tokenProvider()
         let baseURL = await apiHost()
         var components = URLComponents(
@@ -246,7 +484,20 @@ struct GitHubRestAPI: Sendable {
             URLQueryItem(name: "per_page", value: "1"),
             URLQueryItem(name: "page", value: "1")
         ]
-        let (data, response) = try await authorizedGet(url: components.url!, token: token)
+        let (data, response) = try await authorizedGet(
+            url: components.url!,
+            token: token,
+            allowedStatuses: [200, 304, 404],
+            useETag: false
+        )
+        return try Self.openPullRequestCount(from: data, response: response)
+    }
+
+    static func openPullRequestCount(from data: Data, response: HTTPURLResponse) throws -> Int? {
+        if response.statusCode == 404 {
+            return nil
+        }
+
         let pulls = try GitHubDecoding.decode([PullRequestListItem].self, from: data)
 
         if let link = response.value(forHTTPHeaderField: "Link"), let last = GitHubPagination.lastPage(from: link) {
@@ -264,7 +515,7 @@ struct GitHubRestAPI: Sendable {
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [URLQueryItem(name: "per_page", value: "1")]
-        let (data, response) = try await authorizedGet(url: components.url!, token: token)
+        let (data, response) = try await authorizedGet(url: components.url!, token: token, useETag: false)
         if let link = response.value(forHTTPHeaderField: "Link"), let last = GitHubPagination.lastPage(from: link) {
             return last
         }
@@ -272,34 +523,38 @@ struct GitHubRestAPI: Sendable {
         return items.count
     }
 
-    func recentPullRequests(owner: String, name: String, limit: Int = 20) async throws -> [RepoPullRequestSummary] {
-        try await self.recentList(
-            owner: owner,
-            name: name,
-            path: "pulls",
-            limit: limit,
-            queryItems: [
-                URLQueryItem(name: "state", value: "open"),
-                URLQueryItem(name: "sort", value: "updated"),
-                URLQueryItem(name: "direction", value: "desc")
-            ],
-            decode: GitHubRecentDecoders.decodeRecentPullRequests(from:)
-        )
-    }
-
     func recentIssues(owner: String, name: String, limit: Int = 20) async throws -> [RepoIssueSummary] {
-        try await self.recentList(
-            owner: owner,
-            name: name,
-            path: "issues",
-            limit: limit,
-            queryItems: [
+        let token = try await tokenProvider()
+        let target = max(1, min(limit, 100))
+        let pageSize = 100
+        let maxPages = 10
+        let baseURL = await apiHost()
+        var collected: [RepoIssueSummary] = []
+        var page = 1
+
+        while collected.count < target, page <= maxPages {
+            var components = URLComponents(
+                url: baseURL.appending(path: "/repos/\(owner)/\(name)/issues"),
+                resolvingAgainstBaseURL: false
+            )!
+            components.queryItems = [
                 URLQueryItem(name: "state", value: "open"),
                 URLQueryItem(name: "sort", value: "updated"),
-                URLQueryItem(name: "direction", value: "desc")
-            ],
-            decode: GitHubRecentDecoders.decodeRecentIssues(from:)
-        )
+                URLQueryItem(name: "direction", value: "desc"),
+                URLQueryItem(name: "per_page", value: "\(pageSize)"),
+                URLQueryItem(name: "page", value: "\(page)")
+            ]
+            let (data, _) = try await authorizedGet(url: components.url!, token: token)
+            let decoded = try GitHubRecentDecoders.decodeRecentIssuePage(from: data)
+            collected.append(contentsOf: decoded.issues)
+
+            if decoded.rawCount < pageSize {
+                break
+            }
+            page += 1
+        }
+
+        return Array(collected.prefix(target))
     }
 
     func recentReleases(owner: String, name: String, limit: Int = 20) async throws -> [RepoReleaseSummary] {
@@ -381,23 +636,26 @@ struct GitHubRestAPI: Sendable {
         )
     }
 
-    /// Most recent release (including prereleases) ordered by creation date; skips drafts.
+    /// Most recent stable release ordered by GitHub's latest-release rules; skips drafts and prereleases.
     /// Returns `nil` if the repository has no releases.
     func latestReleaseAny(owner: String, name: String) async throws -> Release? {
         let token = try await tokenProvider()
         let baseURL = await apiHost()
-        var components = URLComponents(
-            url: baseURL.appending(path: "/repos/\(owner)/\(name)/releases"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [URLQueryItem(name: "per_page", value: "20")]
-        let (data, response) = try await authorizedGet(url: components.url!, token: token, allowedStatuses: [200, 304, 404])
-        guard response.statusCode != 404 else { throw URLError(.fileDoesNotExist) }
-        let releases = try GitHubDecoding.decode([ReleaseResponse].self, from: data)
-        return GitHubReleasePicker.latestRelease(from: releases)
+        let url = baseURL.appending(path: "/repos/\(owner)/\(name)/releases/latest")
+        let (data, response) = try await authorizedGet(url: url, token: token, allowedStatuses: [200, 304, 404])
+        return try Self.latestRelease(from: data, response: response)
     }
 
-    private func recentList<T>(
+    static func latestRelease(from data: Data, response: HTTPURLResponse) throws -> Release? {
+        guard response.statusCode != 404 else { return nil }
+
+        let release = try GitHubDecoding.decode(ReleaseResponse.self, from: data)
+        return GitHubReleasePicker.latestRelease(from: [release])
+    }
+}
+
+extension GitHubRestAPI {
+    func recentList<T>(
         owner: String,
         name: String,
         path: String,
@@ -423,6 +681,7 @@ struct GitHubRestAPI: Sendable {
         path: String,
         queryItems: [URLQueryItem],
         limit: Int?,
+        headers: [String: String] = [:],
         decode: @escaping (Data) throws -> [T]
     ) async throws -> [T] {
         let pageSize = 100 // GitHub maximum.
@@ -438,7 +697,7 @@ struct GitHubRestAPI: Sendable {
             items.append(URLQueryItem(name: "per_page", value: "\(pageSize)"))
             items.append(URLQueryItem(name: "page", value: "\(page)"))
             components.queryItems = items
-            let (data, _) = try await authorizedGet(url: components.url!, token: token)
+            let (data, _) = try await authorizedGet(url: components.url!, token: token, headers: headers)
             let itemsPage = try decode(data)
             collected.append(contentsOf: itemsPage)
 
@@ -457,7 +716,7 @@ struct GitHubRestAPI: Sendable {
         return collected
     }
 
-    private func authorizedGet(
+    func authorizedGet(
         url: URL,
         token: String,
         allowedStatuses: Set<Int> = [200, 304],
@@ -485,5 +744,33 @@ private struct InstallationReposResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case totalCount = "total_count"
         case repositories
+    }
+}
+
+private struct RateLimitResponse: Decodable {
+    let resources: [String: RateLimitResourceResponse]
+}
+
+private struct RateLimitResourceResponse: Decodable {
+    let limit: Int?
+    let used: Int?
+    let remaining: Int?
+    let reset: Int
+    let resource: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.limit = try container.decodeIfPresent(Int.self, forKey: .limit)
+        self.used = try container.decodeIfPresent(Int.self, forKey: .used)
+        self.remaining = try container.decodeIfPresent(Int.self, forKey: .remaining)
+        self.reset = try container.decode(Int.self, forKey: .reset)
+        self.resource = container.codingPath.last?.stringValue ?? "unknown"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case used
+        case remaining
+        case reset
     }
 }

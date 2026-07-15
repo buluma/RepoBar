@@ -62,6 +62,7 @@
             else {
                 return []
             }
+
             return self.findGitRepos(in: rootURL, maxDepth: max(0, maxDepth), fileManager: fileManager)
         }
 
@@ -169,6 +170,7 @@
                     for repoURL in chunk {
                         group.addTask {
                             guard var status = loadStatus(at: repoURL) else { return nil }
+
                             var didSync = false
                             var didSyncAttempt = false
                             var didFetch = false
@@ -222,10 +224,15 @@
 
         private func findGitRepos(in root: URL, maxDepth: Int, fileManager: FileManager) -> [URL] {
             var results: [URL] = []
+            var visitedRealPaths: Set<String> = []
 
             func scan(_ url: URL, depth: Int) {
-                if self.isGitRepo(url, fileManager: fileManager) {
-                    results.append(url)
+                let fileURL = (url as NSURL).filePathURL ?? url
+                let realURL = fileURL.resolvingSymlinksInPath().standardizedFileURL
+                guard visitedRealPaths.insert(realURL.path).inserted else { return }
+
+                if self.isGitRepo(fileURL, fileManager: fileManager) {
+                    results.append(fileURL)
                     return
                 }
 
@@ -247,8 +254,14 @@
                     if name.hasPrefix(".") { continue }
 
                     let values = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                    if values?.isSymbolicLink == true { continue }
-                    guard values?.isDirectory == true else { continue }
+                    if values?.isSymbolicLink == true {
+                        var isDirectory: ObjCBool = false
+                        guard fileManager.fileExists(atPath: child.path, isDirectory: &isDirectory),
+                              isDirectory.boolValue
+                        else { continue }
+                    } else {
+                        guard values?.isDirectory == true else { continue }
+                    }
 
                     scan(child, depth: depth + 1)
                 }
@@ -264,40 +277,53 @@
         }
     }
 
-    private struct GitRunner: Sendable {
+    private struct GitRunner {
+        let timeout: TimeInterval = LocalProjectsConstants.gitCommandTimeout
+
         func run(_ arguments: [String], in directory: URL) throws -> String {
-            let process = Process()
-            process.executableURL = GitExecutableLocator.shared.url
-            process.arguments = arguments
-            process.currentDirectoryURL = directory
+            let result: GitProcessOutput
+            do {
+                result = try GitProcessRunner.run(
+                    arguments,
+                    in: directory,
+                    environment: self.environment(),
+                    timeout: self.timeout
+                )
+            } catch let error as GitProcessRunnerError {
+                guard case .timedOut = error else { throw error }
 
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-
-            try process.run()
-            process.waitUntilExit()
-
-            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            if process.terminationStatus != 0 {
-                let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                throw GitRunnerError.commandFailed(output: output, error: error)
+                throw GitRunnerError.timedOut(arguments: arguments, timeout: self.timeout)
+            } catch {
+                throw error
             }
-            return output
+
+            if result.terminationStatus != 0 {
+                throw GitRunnerError.commandFailed(output: result.stdout, error: result.stderr)
+            }
+            return result.stdout
+        }
+
+        private func environment() -> [String: String] {
+            var environment = ProcessInfo.processInfo.environment
+            environment["GIT_TERMINAL_PROMPT"] = "0"
+            environment["GIT_OPTIONAL_LOCKS"] = "0"
+            return environment
         }
     }
 
     private enum GitRunnerError: Error {
         case commandFailed(output: String, error: String)
+        case timedOut(arguments: [String], timeout: TimeInterval)
     }
 
-    private struct GitRemote: Sendable {
+    private struct GitRemote {
         let host: String
         let owner: String
         let name: String
 
-        var fullName: String { "\(self.owner)/\(self.name)" }
+        var fullName: String {
+            "\(self.owner)/\(self.name)"
+        }
 
         static func parse(_ value: String) -> GitRemote? {
             if value.contains("://") {
@@ -310,8 +336,10 @@
             guard let url = URL(string: value),
                   let host = url.host
             else { return nil }
+
             let parts = url.path.split(separator: "/").map(String.init)
             guard parts.count >= 2 else { return nil }
+
             let owner = parts[parts.count - 2]
             let name = self.stripGitSuffix(parts.last ?? "")
             return GitRemote(host: host, owner: owner, name: name)
@@ -321,10 +349,12 @@
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
             guard parts.count == 2 else { return nil }
+
             let hostPart = parts[0].split(separator: "@").last.map(String.init) ?? parts[0]
             let path = parts[1]
             let pathParts = path.split(separator: "/").map(String.init)
             guard pathParts.count >= 2 else { return nil }
+
             let owner = pathParts[pathParts.count - 2]
             let name = self.stripGitSuffix(pathParts.last ?? "")
             return GitRemote(host: hostPart, owner: owner, name: name)
@@ -339,6 +369,7 @@
         guard let raw = try? git.run(["rev-parse", "--abbrev-ref", "HEAD"], in: repoURL) else {
             return "unknown"
         }
+
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed == "HEAD" ? "detached" : trimmed
     }
@@ -355,6 +386,7 @@
         for rawLine in output.split(whereSeparator: \.isNewline) {
             let line = String(rawLine)
             guard line.count >= 3 else { continue }
+
             let status = String(line.prefix(2))
             var path = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
             if let arrowRange = path.range(of: " -> ") {
@@ -388,19 +420,23 @@
 
     private func parseDirtyFiles(from output: String, limit: Int) -> [String] {
         guard limit > 0 else { return [] }
+
         var files: [String] = []
         files.reserveCapacity(limit)
 
         for rawLine in output.split(whereSeparator: \.isNewline) {
             guard files.count < limit else { break }
+
             let line = String(rawLine)
             guard line.count >= 3 else { continue }
+
             let status = String(line.prefix(2))
             var path = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
             if let arrowRange = path.range(of: " -> ") {
                 path = String(path[arrowRange.upperBound...])
             }
             guard path.isEmpty == false else { continue }
+
             let isDirtyStatus = status == "??"
                 || status.contains("M")
                 || status.contains("A")
@@ -421,11 +457,13 @@
         guard let output = try? git.run(["rev-list", "--left-right", "--count", "@{u}...HEAD"], in: repoURL) else {
             return (nil, nil)
         }
+
         let parts = output.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
         guard parts.count >= 2,
               let behind = Int(parts[0]),
               let ahead = Int(parts[1])
         else { return (nil, nil) }
+
         return (ahead, behind)
     }
 
@@ -433,6 +471,7 @@
         guard let raw = try? git.run(["remote", "get-url", "origin"], in: repoURL) else {
             return nil
         }
+
         return GitRemote.parse(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
@@ -440,6 +479,7 @@
         guard let raw = try? git.run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], in: repoURL) else {
             return nil
         }
+
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
@@ -454,6 +494,7 @@
         }
         guard let contents = try? String(contentsOf: gitPath, encoding: .utf8) else { return nil }
         guard let range = contents.range(of: "worktrees/") else { return nil }
+
         let suffix = contents[range.upperBound...]
         let name = suffix.split(whereSeparator: { $0 == "\n" || $0 == "\r" || $0 == "/" }).first
         return name.map(String.init)

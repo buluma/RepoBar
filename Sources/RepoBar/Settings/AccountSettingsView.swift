@@ -11,6 +11,7 @@ struct AccountSettingsView: View {
     @State private var hostMode: HostMode = .githubCom
     @State private var authMethod: AuthMethod = .oauth
     @State private var patInput = ""
+    @State private var monitoredOwnersDraft = ""
     @State private var isValidatingPAT = false
     @State private var validationError: String?
     @State private var tokenValidation: TokenValidationState = .unknown
@@ -21,7 +22,10 @@ struct AccountSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Account") {
+            AccountsListSection(session: self.session, appState: self.appState)
+            GitHubAPIUsageSection(session: self.session, appState: self.appState)
+
+            Section("Add Account") {
                 Picker("Host", selection: self.$hostMode) {
                     ForEach(HostMode.allCases, id: \.self) { mode in
                         Text(mode.label).tag(mode)
@@ -30,7 +34,7 @@ struct AccountSettingsView: View {
                 .pickerStyle(.segmented)
 
                 switch self.session.account {
-                case let .loggedIn(user):
+                case let .loggedIn(user) where self.session.settings.accounts.isEmpty:
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(alignment: .top, spacing: 12) {
                             HStack(spacing: 10) {
@@ -79,6 +83,13 @@ struct AccountSettingsView: View {
                             }
                         }
                         .buttonStyle(.bordered)
+                        if self.session.settings.authMethod == .oauth, self.session.settings.enterpriseHost == nil {
+                            Text("Private organization repositories are visible only after the RepoBar GitHub App is installed on that organization or selected repository.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Link("Manage GitHub App installation", destination: RepoBarAuthDefaults.appInstallURL)
+                                .font(.caption)
+                        }
                     }
                     .padding(.vertical, 4)
                 default:
@@ -143,6 +154,11 @@ struct AccountSettingsView: View {
                             Text("Uses the built-in GitHub.com OAuth app.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Text("Private organization repositories require the RepoBar GitHub App installation to include that organization or repository.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Link("Install RepoBar GitHub App", destination: RepoBarAuthDefaults.appInstallURL)
+                                .font(.caption)
                         }
                         HStack(spacing: 8) {
                             if self.session.account == .loggingIn {
@@ -156,11 +172,62 @@ struct AccountSettingsView: View {
                             .disabled(self.session.account == .loggingIn)
                             .buttonStyle(.borderedProminent)
                         }
-                        Text("Uses browser-based OAuth. Tokens are stored in the system Keychain.")
+                        Text("Uses browser-based OAuth. Tokens are stored by RepoBar's configured auth store.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        TextField("Add owner", text: self.$monitoredOwnersDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { self.addMonitoredOwners() }
+                        Button("Add") { self.addMonitoredOwners() }
+                            .disabled(Self.parseOwners(self.monitoredOwnersDraft).isEmpty)
+                        Button("Use Visible") { self.useVisibleOwners() }
+                            .disabled(self.visibleOwnerCandidates.isEmpty)
+                        Button("Auto") { self.clearMonitoredOwners() }
+                            .disabled(self.selectedMonitoredOwners.isEmpty)
+                    }
+
+                    VStack(spacing: 0) {
+                        if self.selectedMonitoredOwners.isEmpty {
+                            self.monitoredOwnerRow(
+                                title: "Auto",
+                                subtitle: "Personal account plus visible repository owners",
+                                systemImage: "wand.and.stars",
+                                removeAction: nil
+                            )
+                        } else {
+                            ForEach(Array(self.selectedMonitoredOwners.enumerated()), id: \.element) { index, owner in
+                                if index > 0 {
+                                    Divider()
+                                }
+                                self.monitoredOwnerRow(
+                                    title: owner,
+                                    subtitle: self.monitoredOwnerSubtitle(owner),
+                                    systemImage: self.monitoredOwnerIcon(owner),
+                                    removeAction: { self.removeMonitoredOwner(owner) }
+                                )
+                            }
+                        }
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(nsColor: .textBackgroundColor).opacity(0.35))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+                }
+            } header: {
+                Text("Monitored Owners")
+            } footer: {
+                Text("Owners control which accounts RepoBar uses for Actions & Runners. Auto follows your personal account and visible repository owners.")
             }
 
             if let validationError {
@@ -193,14 +260,117 @@ struct AccountSettingsView: View {
                 }
             }
             self.authMethod = self.session.settings.authMethod
+            self.monitoredOwnersDraft = ""
         }
         .task(id: self.session.account) {
             guard case .loggedIn = self.session.account else {
                 self.tokenValidation = .unknown
                 return
             }
+
             await self.validateToken()
         }
+    }
+
+    private var visibleOwnerCandidates: [String] {
+        var owners = self.session.repositories.map(\.owner)
+        if case let .loggedIn(user) = self.session.account {
+            owners.append(user.username)
+        }
+        return OwnerFilter.normalize(owners)
+    }
+
+    private var selectedMonitoredOwners: [String] {
+        OwnerFilter.normalize(self.session.settings.monitoredOwners)
+    }
+
+    private func addMonitoredOwners() {
+        let owners = Self.parseOwners(self.monitoredOwnersDraft)
+        guard !owners.isEmpty else { return }
+
+        self.session.settings.monitoredOwners = OwnerFilter.normalize(self.selectedMonitoredOwners + owners)
+        self.monitoredOwnersDraft = ""
+        self.monitoredOwnersChanged()
+    }
+
+    private func useVisibleOwners() {
+        self.session.settings.monitoredOwners = self.visibleOwnerCandidates
+        self.monitoredOwnersDraft = ""
+        self.monitoredOwnersChanged()
+    }
+
+    private func clearMonitoredOwners() {
+        self.session.settings.monitoredOwners = []
+        self.monitoredOwnersDraft = ""
+        self.monitoredOwnersChanged()
+    }
+
+    private func removeMonitoredOwner(_ owner: String) {
+        let normalized = owner.lowercased()
+        self.session.settings.monitoredOwners = self.selectedMonitoredOwners.filter { $0 != normalized }
+        self.monitoredOwnersChanged()
+    }
+
+    private func monitoredOwnersChanged() {
+        self.appState.persistSettings()
+        if !self.session.settings.menuCustomization.hiddenMainMenuItems.contains(.actionsLimits) {
+            self.session.actionsOrgSnapshots = []
+            NotificationCenter.default.post(name: .menuRepositoriesDidChange, object: nil)
+            self.appState.requestRefresh(cancelInFlight: true)
+        }
+    }
+
+    private static func parseOwners(_ rawValue: String) -> [String] {
+        OwnerFilter.normalize(rawValue.split { separator in
+            separator == "," || separator == " " || separator == "\n" || separator == "\t"
+        }.map(String.init))
+    }
+
+    private func monitoredOwnerIcon(_ owner: String) -> String {
+        guard case let .loggedIn(user) = self.session.account,
+              owner == user.username.lowercased()
+        else { return "building.2" }
+
+        return "person.crop.circle"
+    }
+
+    private func monitoredOwnerSubtitle(_ owner: String) -> String {
+        guard case let .loggedIn(user) = self.session.account,
+              owner == user.username.lowercased()
+        else { return "Pinned owner" }
+
+        return "Personal account"
+    }
+
+    private func monitoredOwnerRow(
+        title: String,
+        subtitle: String,
+        systemImage: String,
+        removeAction: (() -> Void)?
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if let removeAction {
+                Button(action: removeAction) {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Remove owner")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private func login() {
@@ -211,7 +381,6 @@ struct AccountSettingsView: View {
 
             if self.hostMode == .enterprise, let enterpriseURL {
                 self.session.settings.enterpriseHost = enterpriseURL
-                await self.appState.github.setAPIHost(enterpriseURL.appending(path: "/api/v3"))
                 self.session.settings.githubHost = enterpriseURL
                 self.validationError = nil
             } else {
@@ -220,7 +389,6 @@ struct AccountSettingsView: View {
                     self.session.account = .loggedOut
                     return
                 }
-                await self.appState.github.setAPIHost(URL(string: "https://api.github.com")!)
                 self.session.settings.githubHost = URL(string: "https://github.com")!
                 self.session.settings.enterpriseHost = nil
                 self.validationError = nil
@@ -242,14 +410,21 @@ struct AccountSettingsView: View {
                     clientID: effectiveClientID,
                     clientSecret: effectiveClientSecret,
                     host: self.session.settings.enterpriseHost ?? self.session.settings.githubHost,
-                    loopbackPort: self.session.settings.loopbackPort
+                    loopbackPort: self.session.settings.loopbackPort,
+                    scope: usingEnterprise ? "repo read:org" : nil
                 )
                 self.session.settings.authMethod = .oauth
                 self.appState.persistSettings()
                 self.session.hasStoredTokens = true
-                if let user = try? await appState.github.currentUser() {
+                let loginHost = self.session.settings.enterpriseHost ?? self.session.settings.githubHost
+                if let user = await self.appState.currentUserFromLegacyCredentials(host: loginHost) {
                     self.session.account = .loggedIn(user)
                     self.session.lastError = nil
+                    await self.appState.recordAccountForLogin(
+                        user: user,
+                        host: loginHost,
+                        method: .oauth
+                    )
                 } else {
                     self.session.account = .loggedIn(UserIdentity(username: "", host: self.session.settings.githubHost))
                 }
@@ -273,6 +448,7 @@ struct AccountSettingsView: View {
                     self.isValidatingPAT = false
                     return
                 }
+
                 self.session.settings.enterpriseHost = enterpriseURL
                 host = enterpriseURL
             } else {
@@ -299,8 +475,10 @@ struct AccountSettingsView: View {
     private func normalizedEnterpriseHost() -> URL? {
         guard !self.enterpriseHost.isEmpty else { return nil }
         guard var components = URLComponents(string: enterpriseHost) else { return nil }
+
         if components.scheme == nil { components.scheme = "https" }
         guard components.scheme?.lowercased() == "https", components.host != nil else { return nil }
+
         components.path = ""
         components.query = nil
         components.fragment = nil
@@ -309,6 +487,7 @@ struct AccountSettingsView: View {
 
     private func validateToken() async {
         guard case .loggedIn = self.session.account else { return }
+
         if self.tokenValidation == .checking { return }
         self.tokenValidation = .checking
         let started = Date()
@@ -335,6 +514,7 @@ struct AccountSettingsView: View {
 
     private func refreshToken() async {
         guard case .loggedIn = self.session.account else { return }
+
         if self.tokenValidation == .checking { return }
         self.tokenValidation = .checking
         let started = Date()
@@ -346,6 +526,7 @@ struct AccountSettingsView: View {
             guard refreshed != nil else {
                 throw URLError(.userAuthenticationRequired)
             }
+
             await self.logAuth("Auth: token refresh ok in \(Self.formatElapsed(since: started))")
             await self.validateToken()
         } catch {

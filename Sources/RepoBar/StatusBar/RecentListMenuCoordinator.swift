@@ -9,6 +9,7 @@ final class RecentListMenuCoordinator {
     let menuBuilder: StatusBarMenuBuilder
     let menuItemFactory: MenuItemViewFactory
     private let menuService: RecentMenuService
+    private let logger = RepoBarLogging.logger("recent-list")
     private var recentListMenus: [ObjectIdentifier: RecentListMenuEntry] = [:]
     let issueLabelChipLimit = AppLimits.RecentLists.issueLabelChipLimit
 
@@ -34,10 +35,6 @@ final class RecentListMenuCoordinator {
         self.recentListMenus[ObjectIdentifier(menu)] = RecentListMenuEntry(menu: menu, context: context)
     }
 
-    func cachedRecentListCount(fullName: String, kind: RepoRecentMenuKind) -> Int? {
-        self.menuService.cachedRecentListCount(fullName: fullName, kind: kind)
-    }
-
     func cachedRecentCommitCount(fullName: String) -> Int? {
         self.menuService.cachedRecentCommitCount(fullName: fullName)
     }
@@ -46,12 +43,9 @@ final class RecentListMenuCoordinator {
         self.recentListMenus = self.recentListMenus.filter { $0.value.menu != nil }
     }
 
-    func clearMenus() {
-        self.recentListMenus.removeAll(keepingCapacity: true)
-    }
-
     func handleMenuWillOpen(_ menu: NSMenu) -> Bool {
         guard let entry = self.recentListMenus[ObjectIdentifier(menu)] else { return false }
+
         self.menuBuilder.refreshMenuViewHeights(in: menu)
         Task { @MainActor [weak self] in
             await self?.refreshRecentListMenu(menu: menu, context: entry.context)
@@ -65,6 +59,7 @@ final class RecentListMenuCoordinator {
             guard entry.context.kind == .pullRequests || entry.context.kind == .issues,
                   let menu = entry.menu
             else { continue }
+
             Task { @MainActor [weak self] in
                 await self?.refreshRecentListMenu(menu: menu, context: entry.context)
             }
@@ -101,14 +96,25 @@ final class RecentListMenuCoordinator {
 
     func prefetchRecentList(fullName: String, kind: RepoRecentMenuKind) {
         guard let (owner, name) = self.ownerAndName(from: fullName) else { return }
+
         let now = Date()
         guard let descriptor = self.menuService.descriptor(for: kind) else { return }
-        guard descriptor.needsRefresh(fullName, now, self.menuService.cacheTTL) else { return }
+
+        let cacheContext = self.menuService.cacheContext(fullName: fullName)
+        let cacheKey = cacheContext.key
+        guard descriptor.needsRefresh(cacheKey, now, self.menuService.cacheTTL) else { return }
+
         Task { @MainActor [weak self] in
             guard let self else { return }
+
             do {
-                _ = try await descriptor.load(fullName, owner, name, self.menuService.listLimit)
+                self.logger.debug("Prefetch start kind=\(String(describing: kind)) repo=\(fullName)")
+                _ = try await descriptor.load(cacheKey, owner, name, self.menuService.listLimit, cacheContext.github)
+                self.logger.debug("Prefetch ok kind=\(String(describing: kind)) repo=\(fullName)")
             } catch {
+                self.logger.warning(
+                    "Prefetch failed kind=\(String(describing: kind)) repo=\(fullName) error=\(error.userFacingMessage)"
+                )
                 await DiagnosticsLogger.shared.message(
                     "Prefetch failed: \(String(describing: kind)) \(fullName) error=\(error.localizedDescription)"
                 )
@@ -151,9 +157,16 @@ final class RecentListMenuCoordinator {
             systemImage: descriptor.headerIcon
         )
         let actions = self.actions(for: context.kind, fullName: context.fullName)
-        let cached = descriptor.cached(context.fullName, now, self.menuService.cacheTTL)
-        let stale = cached ?? descriptor.stale(context.fullName)
+        let cacheContext = self.menuService.cacheContext(fullName: context.fullName)
+        let cacheKey = cacheContext.key
+        let cached = descriptor.cached(cacheKey, now, self.menuService.cacheTTL)
+        let stale = cached ?? descriptor.stale(cacheKey)
         let staleExtras = self.recentListExtras(for: context, items: stale)
+        let cachedCount = cached?.count.description ?? "nil"
+        let staleCount = stale?.count.description ?? "nil"
+        self.logger.info(
+            "Recent list open kind=\(String(describing: context.kind)) repo=\(context.fullName) cached=\(cachedCount) stale=\(staleCount)"
+        )
         if let stale {
             self.populateRecentListMenu(
                 menu,
@@ -169,19 +182,32 @@ final class RecentListMenuCoordinator {
         }
         menu.update()
 
-        guard descriptor.needsRefresh(context.fullName, now, self.menuService.cacheTTL) else { return }
+        guard descriptor.needsRefresh(cacheKey, now, self.menuService.cacheTTL) else {
+            self.logger.debug("Recent list cache hit kind=\(String(describing: context.kind)) repo=\(context.fullName)")
+            return
+        }
+
+        let startedAt = Date()
+        self.logger.info("Recent list refresh start kind=\(String(describing: context.kind)) repo=\(context.fullName)")
         do {
-            let items = try await descriptor.load(context.fullName, owner, name, self.menuService.listLimit)
+            let items = try await descriptor.load(cacheKey, owner, name, self.menuService.listLimit, cacheContext.github)
+            self.logger.info(
+                "Recent list refresh ok kind=\(String(describing: context.kind)) repo=\(context.fullName) count=\(items.count) dur=\(Self.formatDuration(since: startedAt))"
+            )
+            let rateLimitExtras = await self.currentRateLimitExtras()
             self.populateRecentListMenu(
                 menu,
                 header: header,
                 actions: actions,
-                extras: self.recentListExtras(for: context, items: items),
+                extras: rateLimitExtras + self.recentListExtras(for: context, items: items),
                 content: .items(items, emptyTitle: descriptor.emptyTitle, render: { menu, items in
                     self.renderRecentItems(items, for: context.kind, repoFullName: context.fullName, menu: menu)
                 })
             )
         } catch is AsyncTimeoutError {
+            self.logger.warning(
+                "Recent list timed out kind=\(String(describing: context.kind)) repo=\(context.fullName) timeout=\(self.menuService.loadTimeout)s"
+            )
             await DiagnosticsLogger.shared.message(
                 "Recent list timed out: \(String(describing: context.kind)) \(context.fullName)"
             )
@@ -191,10 +217,18 @@ final class RecentListMenuCoordinator {
                     header: header,
                     actions: actions,
                     extras: staleExtras,
-                    content: .message("Timed out")
+                    content: .message(Self.timeoutMessage(timeout: self.menuService.loadTimeout))
                 )
             }
         } catch {
+            let message = error.userFacingMessage
+            let errorType = String(describing: type(of: error))
+            let duration = Self.formatDuration(since: startedAt)
+            let rateLimitMessage = Self.rateLimitMessage(for: error)
+            self.recordRateLimitIfNeeded(error)
+            self.logger.warning(
+                "Recent list failed kind=\(String(describing: context.kind)) repo=\(context.fullName) error=\(message) type=\(errorType) dur=\(duration)"
+            )
             await DiagnosticsLogger.shared.message(
                 "Recent list failed: \(String(describing: context.kind)) \(context.fullName) error=\(error.localizedDescription)"
             )
@@ -204,11 +238,72 @@ final class RecentListMenuCoordinator {
                     header: header,
                     actions: actions,
                     extras: staleExtras,
-                    content: .message("Failed to load")
+                    content: .message(Self.failureMessage(for: error))
+                )
+            } else if let stale, let rateLimitMessage {
+                self.populateRecentListMenu(
+                    menu,
+                    header: header,
+                    actions: actions,
+                    extras: self.rateLimitExtras(message: rateLimitMessage) + staleExtras,
+                    content: .items(stale, emptyTitle: descriptor.emptyTitle, render: { menu, items in
+                        self.renderRecentItems(items, for: context.kind, repoFullName: context.fullName, menu: menu)
+                    })
                 )
             }
         }
         menu.update()
+    }
+
+    static func timeoutMessage(timeout: TimeInterval) -> String {
+        "Timed out after \(Int(timeout.rounded()))s"
+    }
+
+    static func failureMessage(for error: Error) -> String {
+        let message = error.userFacingMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return "Failed to load" }
+
+        return "Failed: \(message)"
+    }
+
+    static func rateLimitMessage(for error: Error) -> String? {
+        guard let reset = (error as? GitHubAPIError)?.rateLimitedUntil else { return nil }
+
+        return "GitHub rate limited; resets \(RelativeFormatter.string(from: reset, relativeTo: Date()))."
+    }
+
+    private static func formatDuration(since start: Date) -> String {
+        let milliseconds = Int((Date().timeIntervalSince(start) * 1000).rounded())
+        return "\(milliseconds)ms"
+    }
+
+    private func recordRateLimitIfNeeded(_ error: Error) {
+        guard let reset = (error as? GitHubAPIError)?.rateLimitedUntil else { return }
+
+        self.appState.session.rateLimitReset = reset
+        self.appState.session.lastError = error.userFacingMessage
+    }
+
+    private func currentRateLimitExtras() async -> [NSMenuItem] {
+        guard let reset = await self.appState.github.rateLimitReset(now: Date()) else { return [] }
+
+        self.appState.session.rateLimitReset = reset
+        return self.rateLimitExtras(
+            message: "GitHub rate limited; resets \(RelativeFormatter.string(from: reset, relativeTo: Date()))."
+        )
+    }
+
+    private func rateLimitExtras(message: String) -> [NSMenuItem] {
+        [
+            self.makeListItem(
+                title: message,
+                action: nil,
+                representedObject: nil,
+                systemImage: "exclamationmark.triangle",
+                isEnabled: false
+            ),
+            .separator()
+        ]
     }
 
     private func renderRecentItems(_ items: RecentMenuItems, for _: RepoRecentMenuKind, repoFullName: String, menu: NSMenu) {
@@ -272,6 +367,7 @@ final class RecentListMenuCoordinator {
                 .first(where: { $0.fullName == fullName })?
                 .latestRelease != nil
             guard hasLatestRelease else { return [] }
+
             return [
                 RecentMenuAction(
                     title: "Open Latest Release",
@@ -305,8 +401,10 @@ final class RecentListMenuCoordinator {
         let scope = self.appState.session.recentPullRequestScope
         if scope == .mine {
             guard case let .loggedIn(user) = self.appState.session.account else { return [] }
+
             filtered = filtered.filter { pullRequest in
                 guard let author = pullRequest.authorLogin else { return false }
+
                 return author.caseInsensitiveCompare(user.username) == .orderedSame
             }
         }
@@ -328,6 +426,7 @@ final class RecentListMenuCoordinator {
         let scope = self.appState.session.recentIssueScope
         if scope == .mine {
             guard case let .loggedIn(user) = self.appState.session.account else { return [] }
+
             let username = user.username.lowercased()
             filtered = filtered.filter { issue in
                 if let author = issue.authorLogin?.lowercased(), author == username {

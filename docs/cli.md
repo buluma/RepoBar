@@ -3,6 +3,7 @@ summary: "RepoBar CLI command reference."
 read_when:
   - Using or documenting RepoBar CLI commands
   - Updating CLI flags or output
+  - Debugging CLI auth/token storage
 ---
 
 # RepoBar CLI
@@ -13,6 +14,16 @@ Binary name: `repobar`
 
 The CLI covers the data surfaces shown in the menubar and repo submenus, plus
 the local actions and settings that can be scripted.
+
+## Auth Storage
+
+By default, release CLI/app auth uses the macOS Keychain. SwiftPM debug CLI builds use the same file-backed debug store as the debug app, so local `.build/debug/repobarcli` commands and tests do not prompt for Keychain access. For installed release builds, set `REPOBAR_TOKEN_STORE=file` when you explicitly want the file-backed debug store:
+
+```sh
+REPOBAR_TOKEN_STORE=file repobar status
+```
+
+The file store lives under `~/Library/Application Support/RepoBar/DebugAuth`. See `docs/auth-storage.md` for the exact precedence and release rules.
 
 ## Help
 
@@ -55,7 +66,8 @@ the local actions and settings that can be scripted.
 - `commits [<owner/name>|<login>]`: recent commits (repo or global).
   - Flags: `--limit`, `--scope` (all|my), `--login`.
 - `activity [<owner/name>|<login>]`: recent activity (repo or global).
-  - Flags: `--limit`, `--scope` (all|my), `--login`.
+  - Flags: `--limit`, `--scope` (all|my), `--login`, `--include-repos`.
+  - `--include-repos` merges cached repository activity, matching the profile submenu.
 - `local`: scan local project folder for git repos.
   - Flags: `--root`, `--depth`, `--sync`, `--limit`.
 - `local sync <path|owner/name>`: fast-forward local repo (fetch/rebase/push).
@@ -78,12 +90,34 @@ the local actions and settings that can be scripted.
   - Flags: `--width`, `--no-wrap`, `--plain`, `--no-color`.
 - `pin <owner/name>` / `unpin <owner/name>`: manage pinned repos.
 - `hide <owner/name>` / `show <owner/name>`: manage hidden repos.
+- `archives list`: list configured GitHub backup archive sources.
+- `archives status [name]`: show path/readiness diagnostics, import metadata, and row counts for all archive sources or one source.
+- `archives validate [name]`: fail if archive source configuration is invalid.
+- `archives update <name>`: pull the configured Git snapshot when a remote is set and import the Discrawl-style `manifest.json`/JSONL tables into the configured SQLite database.
+- `archives add <name>`: add a RepoBar-owned GitHub backup archive source.
+  - Flags: `--repo` (local Git snapshot path), `--remote` (Git remote URL),
+    `--branch` (default `main`), `--db` (imported SQLite path).
+- `archives remove <name>`: remove an archive source from RepoBar settings.
+- `archives enable <name>` / `archives disable <name>`: toggle an archive source.
+- `cache status`: show persistent REST and GraphQL cache diagnostics.
+  - Flags: `--limit` (recent response rows to include).
+- `rate-limits` / `cache rate-limits`: show observed and active GitHub rate-limit state from the persistent cache.
+  - Flags: `--limit` (recent response rows to inspect).
+- `cache clear`: clear persistent REST responses, GraphQL responses, and rate-limit rows.
 - `settings show`: print current settings.
 - `settings set <key> <value>`: update settings (refresh interval, display limit, heatmap, local settings).
 - `login`: browser OAuth login.
-  - Flags: `--host`, `--client-id`, `--client-secret`, `--loopback-port`.
+  - Flags: `--host`, `--client-id`, `--client-secret`, `--loopback-port`, `--label`.
+  - On success the CLI fetches `GET /user` to identify the signed-in account, persists tokens under the account-scoped Keychain/file keys, and appends the account to `accounts`.
 - `logout`: clear stored credentials.
+  - Flags: `--account <id|user@host>` (defaults to the active account), `--all` (clear every configured account).
 - `status`: show login state.
+  - Flags: `--account <id|user@host>` (defaults to the active account).
+- `import-gh-token`: import an SSO-enabled token from the GitHub CLI.
+  - Flags: `--host`, `--label`.
+- `accounts list`: list configured accounts (active account marked with `*`).
+- `accounts use <id|user@host>`: set the active account.
+- `accounts remove <id|user@host>`: clear stored credentials and remove the account.
 ### Output standards
 - All list commands support: `--limit`, `--json`, `--plain`, `--no-color`.
 - List items include URLs when `--plain` is not set (link-enabled terminals).
@@ -97,6 +131,7 @@ the local actions and settings that can be scripted.
 - `show-archived` (true|false)
 - `menu-sort` (activity|issues|prs|stars|repo|event)
 - `show-contribution-header` (true|false)
+- `show-rate-limit-meter` (true|false)
 - `card-density` (comfortable|compact)
 - `accent-tone` (system|github-green)
 - `activity-scope` (all|my)

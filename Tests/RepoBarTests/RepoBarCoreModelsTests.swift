@@ -4,15 +4,15 @@ import Testing
 
 struct RepoBarCoreModelsTests {
     @Test
-    func userIdentity_init() {
-        let host = URL(string: "https://github.com")!
+    func `user identity init`() throws {
+        let host = try #require(URL(string: "https://github.com"))
         let identity = UserIdentity(username: "steipete", host: host)
         #expect(identity.username == "steipete")
         #expect(identity.host == host)
     }
 
     @Test
-    func repository_fullName_and_withOrder() {
+    func `repository full name and with order`() {
         var repo = Repository(
             id: "1",
             name: "RepoBar",
@@ -34,7 +34,7 @@ struct RepoBarCoreModelsTests {
     }
 
     @Test
-    func localProjectsRefreshInterval_labels() {
+    func `local projects refresh interval labels`() {
         #expect(LocalProjectsRefreshInterval.oneMinute.label == "1 minute")
         #expect(LocalProjectsRefreshInterval.twoMinutes.label == "2 minutes")
         #expect(LocalProjectsRefreshInterval.fiveMinutes.label == "5 minutes")
@@ -43,16 +43,16 @@ struct RepoBarCoreModelsTests {
     }
 
     @Test
-    func userSettings_defaults() {
+    func `user settings defaults`() {
         let settings = UserSettings()
         #expect(settings.localProjects.worktreeFolderName == ".work")
         #expect(settings.localProjects.autoSyncEnabled == true)
     }
 
     @Test
-    func repoRecentItems_init() {
+    func `repo recent items init`() throws {
         let now = Date()
-        let url = URL(string: "https://example.com")!
+        let url = try #require(URL(string: "https://example.com"))
         _ = RepoIssueSummary(
             number: 1,
             title: "Issue",
@@ -115,9 +115,97 @@ struct RepoBarCoreModelsTests {
     }
 
     @Test
-    func backoffTracker_lifecycle() async {
+    func `github reference matches prefer newest created date`() throws {
+        let url = try #require(URL(string: "https://example.com"))
+        let older = GitHubReferenceMatch(
+            query: .issueNumber(42),
+            title: "Older",
+            url: url,
+            repositoryFullName: "owner/old",
+            kind: .issue,
+            state: .open,
+            createdAt: Date(timeIntervalSinceReferenceDate: 10),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 100)
+        )
+        let newer = GitHubReferenceMatch(
+            query: .issueNumber(42),
+            title: "Newer",
+            url: url,
+            repositoryFullName: "owner/new",
+            kind: .pullRequest,
+            state: .closed,
+            createdAt: Date(timeIntervalSinceReferenceDate: 20),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 30)
+        )
+
+        #expect(GitHubReferenceMatch.newestCreated(in: [older, newer])?.repositoryFullName == "owner/new")
+    }
+
+    @Test
+    func `github reference match stores preview metadata`() throws {
+        let url = try #require(URL(string: "https://example.com"))
+        let match = GitHubReferenceMatch(
+            query: .repositoryIssueNumber(repositoryFullName: "owner/repo", number: 5),
+            title: "Title",
+            url: url,
+            repositoryFullName: "owner/repo",
+            kind: .pullRequest,
+            state: .open,
+            createdAt: Date(timeIntervalSinceReferenceDate: 10),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 20),
+            bodyPreview: "Preview text",
+            aiSummary: "AI summary",
+            authorLogin: "alice"
+        )
+
+        #expect(match.bodyPreview == "Preview text")
+        #expect(match.aiSummary == "AI summary")
+        #expect(match.authorLogin == "alice")
+    }
+
+    @Test
+    func `github reference query display text`() {
+        #expect(GitHubReferenceQuery.issueNumber(7).displayText == "#7")
+        #expect(GitHubReferenceState.open.label == "Open")
+        #expect(GitHubReferenceState.closed.label == "Closed")
+        #expect(GitHubReferenceState.merged.label == "Merged")
+        #expect(
+            GitHubReferenceQuery.repositoryNameIssueNumber(
+                repositoryName: "discrawl",
+                number: 64
+            ).displayText == "discrawl#64"
+        )
+        #expect(
+            GitHubReferenceQuery.repositoryIssueNumber(
+                repositoryFullName: "openclaw/openclaw",
+                number: 73655
+            ).displayText == "openclaw/openclaw#73655"
+        )
+        #expect(GitHubReferenceQuery.commitHash("ffd212ca43abcdef").displayText == "ffd212ca43")
+        #expect(
+            GitHubReferenceQuery.repositoryCommitHash(
+                repositoryFullName: "openclaw/openclaw",
+                hash: "ffd212ca43abcdef"
+            ).displayText == "openclaw/openclaw@ffd212ca43"
+        )
+        #expect(
+            GitHubReferenceQuery.repositoryWorkflowRun(
+                repositoryFullName: "openclaw/songsee",
+                runID: 25_620_622_163
+            ).displayText == "openclaw/songsee run 25620622163"
+        )
+        let scoped = GitHubReferenceQuery.repositoryIssueNumber(
+            repositoryFullName: "openclaw/openclaw",
+            number: 73655
+        )
+        #expect(scoped.repositoryOwnerAndName?.owner == "openclaw")
+        #expect(scoped.repositoryOwnerAndName?.name == "openclaw")
+    }
+
+    @Test
+    func `backoff tracker lifecycle`() async throws {
         let tracker = BackoffTracker()
-        let url = URL(string: "https://example.com")!
+        let url = try #require(URL(string: "https://example.com"))
         let now = Date()
         #expect(await tracker.isCoolingDown(url: url, now: now) == false)
         await tracker.setCooldown(url: url, until: now.addingTimeInterval(60))
@@ -129,7 +217,7 @@ struct RepoBarCoreModelsTests {
     }
 
     @Test
-    func gitExecutableLocator_version() {
+    func `git executable locator version`() {
         let result = GitExecutableLocator.version(at: URL(fileURLWithPath: "/usr/bin/git"))
         #expect(result.version != nil)
         #expect(result.error == nil)

@@ -4,7 +4,7 @@ import Testing
 
 struct RepoOwnerFilterTests {
     @Test
-    func parseOwnersSplitsAndNormalizes() {
+    func `parse owners splits and normalizes`() {
         let filter = RepoOwnerFilter.parse([
             "Steipete, org-one",
             "org-two/repo",
@@ -16,14 +16,14 @@ struct RepoOwnerFilterTests {
     }
 
     @Test
-    func parseOwnersIgnoresEmptyTokens() {
+    func `parse owners ignores empty tokens`() {
         let filter = RepoOwnerFilter.parse([" , , "])
         #expect(filter == nil)
     }
 
     @Test
-    func applyingFiltersByOwner() {
-        let filter = RepoOwnerFilter.parse(["mine"])!
+    func `applying filters by owner`() throws {
+        let filter = try #require(RepoOwnerFilter.parse(["mine"]))
         let repos = [
             Repository(
                 id: "1",
@@ -60,5 +60,13 @@ struct RepoOwnerFilterTests {
         let filtered = filter.applying(to: repos)
         #expect(filtered.count == 1)
         #expect(filtered.first?.fullName == "mine/one")
+    }
+
+    @Test
+    func `owner filtered activity fetch does not pre limit global repos`() throws {
+        let filter = try #require(RepoOwnerFilter.parse(["amantus-ai"]))
+
+        #expect(ReposCommand.activityFetchLimit(requestedLimit: 50, ownerFilter: nil) == 50)
+        #expect(ReposCommand.activityFetchLimit(requestedLimit: 50, ownerFilter: filter) == nil)
     }
 }

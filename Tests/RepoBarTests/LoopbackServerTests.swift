@@ -5,7 +5,7 @@ import Testing
 
 struct LoopbackServerTests {
     @Test
-    func parseExtractsCodeAndState() {
+    func `parse extracts code and state`() {
         let request = "GET /callback?code=abc&state=xyz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
         let parsed = LoopbackServer.parse(request: request)
         #expect(parsed?.code == "abc")
@@ -14,19 +14,19 @@ struct LoopbackServerTests {
 
     @Test
     @MainActor
-    func waitForCallbackReturnsResult() async throws {
+    func `wait for callback returns result`() async throws {
         let (server, redirectURL) = try await Self.startServer()
         defer { server.stop() }
 
         let expectedCode = "code-1"
         let expectedState = "state-1"
 
-        var components = URLComponents(url: redirectURL, resolvingAgainstBaseURL: false)!
+        var components = try #require(URLComponents(url: redirectURL, resolvingAgainstBaseURL: false))
         components.queryItems = [
             URLQueryItem(name: "code", value: expectedCode),
             URLQueryItem(name: "state", value: expectedState)
         ]
-        let callbackURL = components.url!
+        let callbackURL = try #require(components.url)
 
         let sendTask = Task.detached {
             while !Task.isCancelled {
@@ -49,7 +49,7 @@ struct LoopbackServerTests {
 
     @Test
     @MainActor
-    func waitForCallbackTimesOut() async throws {
+    func `wait for callback times out`() async throws {
         let (server, _) = try await Self.startServer()
         defer { server.stop() }
 
@@ -63,7 +63,7 @@ struct LoopbackServerTests {
 
     @Test
     @MainActor
-    func startThrowsPortInUse() async throws {
+    func `start throws port in use`() throws {
         let (port, socket) = try Self.reservePort()
         defer { close(socket) }
 

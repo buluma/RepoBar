@@ -40,10 +40,15 @@ struct LocalProjectsCommand: CommanderRunnableCommand {
         if self.depth < 0 { throw ValidationError("--depth must be >= 0") }
         if let limit, limit <= 0 { throw ValidationError("--limit must be > 0") }
 
-        let settings = SettingsStore().load()
+        let settings = cliSettingsStore().load()
         let rootPath = self.root
             ?? settings.localProjects.rootPath
             ?? "~/Projects"
+        let resolvedRoot = PathFormatter.expandTilde(rootPath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: resolvedRoot, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw ValidationError("Local projects root does not exist: \(PathFormatter.displayString(resolvedRoot))")
+        }
 
         let service = LocalProjectsService()
         let snapshot = await service.snapshot(
@@ -54,7 +59,6 @@ struct LocalProjectsCommand: CommanderRunnableCommand {
         )
 
         let displayRoot = PathFormatter.displayString(rootPath)
-        let resolvedRoot = PathFormatter.expandTilde(rootPath)
 
         let statuses = snapshot.statuses
         let syncedPaths = Set(snapshot.syncedStatuses.map(\.path.path))
@@ -98,7 +102,7 @@ struct LocalProjectsCommand: CommanderRunnableCommand {
     }
 }
 
-private struct LocalProjectsOutput: Codable, Sendable {
+private struct LocalProjectsOutput: Codable {
     let root: String
     let resolvedRoot: String
     let depth: Int
@@ -106,7 +110,7 @@ private struct LocalProjectsOutput: Codable, Sendable {
     let repositories: [LocalRepoOutput]
 }
 
-private struct LocalRepoOutput: Codable, Sendable {
+private struct LocalRepoOutput: Codable {
     let displayName: String
     let fullName: String?
     let branch: String

@@ -3,6 +3,7 @@ set -euo pipefail
 CONFIGURATION=${1:-debug}
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="RepoBar"
+BUNDLE_IDENTIFIER="${REPOBAR_BUNDLE_IDENTIFIER:-com.steipete.repobar}"
 ARCH_ARGS=()
 
 # Load version info
@@ -108,7 +109,7 @@ cat > "${INFO_PLIST}" <<PLIST
 <dict>
     <key>CFBundleName</key><string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
-    <key>CFBundleIdentifier</key><string>com.steipete.repobar</string>
+    <key>CFBundleIdentifier</key><string>${BUNDLE_IDENTIFIER}</string>
     <key>CFBundleExecutable</key><string>${APP_NAME}</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION}</string>
@@ -120,12 +121,16 @@ cat > "${INFO_PLIST}" <<PLIST
     <key>LSUIElement</key><true/>
     <key>LSMultipleInstancesProhibited</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+$(if [ "${CONFIGURATION}" = "debug" ]; then cat <<'PLIST_DEBUG_AUTH'
+    <key>RepoBarTokenStore</key><string>file</string>
+PLIST_DEBUG_AUTH
+fi)
     <key>CFBundleIconFile</key><string>Icon</string>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.steipete.repobar</string>
+            <string>${BUNDLE_IDENTIFIER}</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>repobar</string>
@@ -141,6 +146,9 @@ IDENTITY="${CODESIGN_IDENTITY:-${CODE_SIGN_IDENTITY:-}}"
 if [ -n "${IDENTITY}" ] && [ -d "${APP_BUNDLE}" ]; then
   log "==> Codesigning with ${IDENTITY}"
   "${ROOT_DIR}/Scripts/codesign_app.sh" "${APP_BUNDLE}" "${IDENTITY}" || true
+elif [ "${CONFIGURATION}" = "debug" ] && [ -d "${APP_BUNDLE}" ] && command -v codesign >/dev/null 2>&1; then
+  log "==> Ad-hoc codesigning debug app"
+  codesign --force --deep --sign - "${APP_BUNDLE}" || true
 fi
 
 # Package dSYM (release builds only)

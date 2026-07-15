@@ -4,8 +4,8 @@ import Testing
 
 @Suite("RepositoryPipeline")
 struct RepositoryPipelineTests {
-    @Test("Filters onlyWith work")
-    func filtersOnlyWithWork() {
+    @Test
+    func `Filters onlyWith work`() {
         let repos = [
             Self.makeRepo("a/one", issues: 2, pulls: 1),
             Self.makeRepo("b/two", issues: 0, pulls: 2),
@@ -18,8 +18,8 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["a/one", "b/two"])
     }
 
-    @Test("Pinned priority overrides sort order")
-    func pinnedPriorityOverridesSort() {
+    @Test
+    func `Pinned priority overrides sort order`() {
         let repos = [
             Self.makeRepo("a/alpha", issues: 10, pulls: 1),
             Self.makeRepo("b/bravo", issues: 1, pulls: 1)
@@ -33,8 +33,8 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["b/bravo", "a/alpha"])
     }
 
-    @Test("Applies age cutoff against activityDate")
-    func appliesAgeCutoff() {
+    @Test
+    func `Applies age cutoff against activityDate`() {
         let now = Date()
         let recent = Self.makeRepo("a/recent", issues: 0, pulls: 0, pushedAt: now.addingTimeInterval(-60))
         let stale = Self.makeRepo("b/stale", issues: 0, pulls: 0, pushedAt: now.addingTimeInterval(-86400 * 10))
@@ -43,8 +43,8 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["a/recent"])
     }
 
-    @Test("Hidden scope returns only hidden repositories")
-    func hiddenScopeFiltersHidden() {
+    @Test
+    func `Hidden scope returns only hidden repositories`() {
         let repos = [
             Self.makeRepo("a/one", issues: 0, pulls: 0),
             Self.makeRepo("b/two", issues: 0, pulls: 0),
@@ -58,8 +58,39 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["b/two"])
     }
 
-    @Test("Pinned scope filters to pinned list")
-    func pinnedScopeFiltersPinned() {
+    @Test
+    func `Pinned repository remains visible when stale hidden entry remains`() {
+        let repos = [
+            Self.makeRepo("a/one", issues: 0, pulls: 0),
+            Self.makeRepo("b/two", issues: 0, pulls: 0)
+        ]
+        let query = RepositoryQuery(
+            scope: .all,
+            pinned: ["b/two"],
+            hidden: Set(["b/two"]),
+            pinPriority: true
+        )
+        let result = RepositoryPipeline.apply(repos, query: query)
+        #expect(result.map(\.fullName) == ["b/two", "a/one"])
+    }
+
+    @Test
+    func `Hidden scope excludes repositories that are also pinned`() {
+        let repos = [
+            Self.makeRepo("a/one", issues: 0, pulls: 0),
+            Self.makeRepo("b/two", issues: 0, pulls: 0)
+        ]
+        let query = RepositoryQuery(
+            scope: .hidden,
+            pinned: ["b/two"],
+            hidden: Set(["a/one", "b/two"])
+        )
+        let result = RepositoryPipeline.apply(repos, query: query)
+        #expect(result.map(\.fullName) == ["a/one"])
+    }
+
+    @Test
+    func `Pinned scope filters to pinned list`() {
         let repos = [
             Self.makeRepo("a/one", issues: 0, pulls: 0),
             Self.makeRepo("b/two", issues: 0, pulls: 0),
@@ -74,8 +105,8 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["c/three", "a/one"])
     }
 
-    @Test("Pinned scope matches case-insensitively")
-    func pinnedScopeMatchesCaseInsensitively() {
+    @Test
+    func `Pinned scope matches case-insensitively`() {
         let repos = [
             Self.makeRepo("Owner/Repo", issues: 0, pulls: 0),
             Self.makeRepo("other/repo", issues: 0, pulls: 0)
@@ -89,8 +120,31 @@ struct RepositoryPipelineTests {
         #expect(result.map(\.fullName) == ["Owner/Repo"])
     }
 
-    @Test("Default age cutoff applies only to all scope")
-    func ageCutoffDefaults() {
+    @Test
+    func `Duplicate repositories are collapsed case-insensitively`() {
+        let first = Self.makeRepo("Owner/Repo", issues: 1, pulls: 0)
+        let duplicate = Self.makeRepo("owner/repo", issues: 99, pulls: 0)
+        let other = Self.makeRepo("owner/other", issues: 2, pulls: 0)
+
+        let query = RepositoryQuery(
+            includeForks: true,
+            includeArchived: true,
+            sortKey: .issues
+        )
+        let result = RepositoryPipeline.apply([first, duplicate, other], query: query)
+        let matchingFullNames = result
+            .map { $0.fullName.lowercased() }
+            .filter { $0 == "owner/repo" }
+        let keptFirstDuplicate = result.contains { repo in
+            repo.fullName == first.fullName && repo.openIssues == first.openIssues
+        }
+
+        #expect(matchingFullNames.count == 1)
+        #expect(keptFirstDuplicate)
+    }
+
+    @Test
+    func `Default age cutoff applies only to all scope`() {
         let now = Date()
         #expect(RepositoryQueryDefaults.ageCutoff(now: now, scope: .pinned) == nil)
         #expect(RepositoryQueryDefaults.ageCutoff(now: now, scope: .hidden) == nil)

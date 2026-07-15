@@ -43,7 +43,9 @@ final class DisabledUpdaterController: UpdaterProviding {
             set { self.updater.automaticallyDownloadsUpdates = newValue }
         }
 
-        var isAvailable: Bool { true }
+        var isAvailable: Bool {
+            true
+        }
     }
 #endif
 
@@ -73,6 +75,7 @@ final class SparkleController: NSObject {
 
         #if canImport(Sparkle)
             guard canUseSparkle else { return }
+
             let saved = (UserDefaults.standard.object(forKey: self.defaultsKey) as? Bool) ?? true
             let controller = SPUStandardUpdaterController(
                 startingUpdater: false,
@@ -105,10 +108,11 @@ final class SparkleController: NSObject {
 
     func checkForUpdates() {
         guard self.canCheckForUpdates else { return }
+
         self.updater.checkForUpdates(nil)
     }
 
-    private static func isDeveloperIDSigned(bundleURL: URL) -> Bool {
+    nonisolated static func isDeveloperIDSigned(bundleURL: URL) -> Bool {
         var staticCode: SecStaticCode?
         guard SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &staticCode) == errSecSuccess,
               let code = staticCode else { return false }

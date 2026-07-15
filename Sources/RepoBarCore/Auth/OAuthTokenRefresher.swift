@@ -1,6 +1,8 @@
 import Foundation
 
 public struct OAuthTokenRefresher: Sendable {
+    private static let refreshGate = OAuthRefreshGate()
+
     private let tokenStore: TokenStore
     private let load: @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
@@ -15,7 +17,12 @@ public struct OAuthTokenRefresher: Sendable {
     }
 
     public func refreshIfNeeded(host: URL, force: Bool = false) async throws -> OAuthTokens? {
-        guard var tokens = try tokenStore.load() else { return nil }
+        try await self.refreshIfNeeded(host: host, force: force, accountID: nil)
+    }
+
+    public func refreshIfNeeded(host: URL, force: Bool = false, accountID: String?) async throws -> OAuthTokens? {
+        guard let tokens = self.loadTokens(accountID: accountID) else { return nil }
+
         if tokens.refreshToken.isEmpty {
             return tokens
         }
@@ -23,7 +30,32 @@ public struct OAuthTokenRefresher: Sendable {
             return tokens
         }
 
-        let credentials = try tokenStore.loadClientCredentials()
+        let key = OAuthRefreshKey(
+            tokenStore: self.tokenStore.oauthRefreshCoordinationID,
+            host: host.absoluteString,
+            accountID: accountID
+        )
+        return try await Self.refreshGate.run(key: key) {
+            try await self.performRefreshIfNeeded(host: host, force: force, accountID: accountID)
+        }
+    }
+
+    private func performRefreshIfNeeded(host: URL, force: Bool, accountID: String?) async throws -> OAuthTokens? {
+        guard var tokens = self.loadTokens(accountID: accountID) else { return nil }
+
+        if tokens.refreshToken.isEmpty {
+            return tokens
+        }
+        if force == false, let expiry = tokens.expiresAt, expiry > Date().addingTimeInterval(60) {
+            return tokens
+        }
+
+        let storedCredentials = if let accountID {
+            try self.tokenStore.loadClientCredentials(accountID: accountID)
+        } else {
+            try self.tokenStore.loadClientCredentials()
+        }
+        let credentials = storedCredentials
             ?? OAuthClientCredentials(clientID: RepoBarAuthDefaults.clientID, clientSecret: RepoBarAuthDefaults.clientSecret)
 
         let base = host.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -32,7 +64,7 @@ public struct OAuthTokenRefresher: Sendable {
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Accept")
         request.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = Self.formUrlEncoded([
+        request.httpBody = OAuthFormEncoder.encode([
             "client_id": credentials.clientID,
             "client_secret": credentials.clientSecret,
             "grant_type": "refresh_token",
@@ -48,6 +80,7 @@ public struct OAuthTokenRefresher: Sendable {
             let message = Self.refreshErrorMessage(status: response.statusCode, detail: detail)
             throw GitHubAPIError.badStatus(code: response.statusCode, message: message)
         }
+
         do {
             let decoded = try JSONDecoder().decode(TokenResponse.self, from: data)
             let expires = Date().addingTimeInterval(TimeInterval(decoded.expiresIn ?? 3600))
@@ -56,7 +89,11 @@ public struct OAuthTokenRefresher: Sendable {
                 refreshToken: decoded.refreshToken ?? tokens.refreshToken,
                 expiresAt: expires
             )
-            try self.tokenStore.save(tokens: tokens)
+            if let accountID {
+                try self.tokenStore.save(tokens: tokens, accountID: accountID)
+            } else {
+                try self.tokenStore.save(tokens: tokens)
+            }
             return tokens
         } catch {
             let detail = Self.refreshErrorDetail(from: data)
@@ -64,18 +101,55 @@ public struct OAuthTokenRefresher: Sendable {
             throw GitHubAPIError.badStatus(code: response.statusCode, message: message)
         }
     }
+
+    private func loadTokens(accountID: String?) -> OAuthTokens? {
+        accountID.map { try? self.tokenStore.loadTokens(accountID: $0) } ?? (try? self.tokenStore.load())
+    }
+}
+
+private struct OAuthRefreshKey: Hashable {
+    let tokenStore: String
+    let host: String
+    let accountID: String?
+}
+
+private actor OAuthRefreshGate {
+    private struct Entry {
+        let id: UUID
+        let task: Task<OAuthTokens?, Error>
+    }
+
+    private var entries: [OAuthRefreshKey: Entry] = [:]
+
+    func run(
+        key: OAuthRefreshKey,
+        operation: @escaping @Sendable () async throws -> OAuthTokens?
+    ) async throws -> OAuthTokens? {
+        if let entry = self.entries[key] {
+            return try await entry.task.value
+        }
+
+        let id = UUID()
+        let task = Task { try await operation() }
+        self.entries[key] = Entry(id: id, task: task)
+        do {
+            let tokens = try await task.value
+            self.removeEntry(key: key, id: id)
+            return tokens
+        } catch {
+            self.removeEntry(key: key, id: id)
+            throw error
+        }
+    }
+
+    private func removeEntry(key: OAuthRefreshKey, id: UUID) {
+        guard self.entries[key]?.id == id else { return }
+
+        self.entries[key] = nil
+    }
 }
 
 private extension OAuthTokenRefresher {
-    static func formUrlEncoded(_ params: [String: String]) -> Data? {
-        let encoded = params.map { key, value in
-            let k = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
-            let v = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
-            return "\(k)=\(v)"
-        }.joined(separator: "&")
-        return encoded.data(using: .utf8)
-    }
-
     static func refreshErrorDetail(from data: Data) -> String? {
         if let decoded = try? JSONDecoder().decode(OAuthErrorResponse.self, from: data) {
             let error = decoded.errorDescription ?? decoded.message ?? decoded.error

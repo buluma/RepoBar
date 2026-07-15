@@ -34,4 +34,22 @@ public struct RateLimitSnapshot: Sendable {
             fetchedAt: now
         )
     }
+
+    public var remainingPercent: Double? {
+        RateLimitJuice.percent(remaining: self.remaining, limit: self.limit)
+    }
+}
+
+public struct RateLimitResourcesSnapshot: Sendable {
+    public let fetchedAt: Date
+    public let resources: [String: RateLimitSnapshot]
+
+    public init(fetchedAt: Date, resources: [String: RateLimitSnapshot]) {
+        self.fetchedAt = fetchedAt
+        self.resources = resources
+    }
+
+    public subscript(resource: String) -> RateLimitSnapshot? {
+        self.resources[resource]
+    }
 }

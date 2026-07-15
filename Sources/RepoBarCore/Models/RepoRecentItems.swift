@@ -1,5 +1,11 @@
 import Foundation
 
+public enum GitHubPullRequestListState: String, Sendable {
+    case open
+    case closed
+    case all
+}
+
 public struct RepoIssueLabel: Sendable, Hashable {
     public let name: String
     public let colorHex: String
@@ -15,6 +21,7 @@ public struct RepoIssueSummary: Sendable, Hashable {
     public let title: String
     public let url: URL
     public let updatedAt: Date
+    public let createdAt: Date?
     public let authorLogin: String?
     public let authorAvatarURL: URL?
     public let assigneeLogins: [String]
@@ -26,6 +33,7 @@ public struct RepoIssueSummary: Sendable, Hashable {
         title: String,
         url: URL,
         updatedAt: Date,
+        createdAt: Date? = nil,
         authorLogin: String?,
         authorAvatarURL: URL?,
         assigneeLogins: [String],
@@ -36,6 +44,7 @@ public struct RepoIssueSummary: Sendable, Hashable {
         self.title = title
         self.url = url
         self.updatedAt = updatedAt
+        self.createdAt = createdAt
         self.authorLogin = authorLogin
         self.authorAvatarURL = authorAvatarURL
         self.assigneeLogins = assigneeLogins
@@ -45,10 +54,18 @@ public struct RepoIssueSummary: Sendable, Hashable {
 }
 
 public struct RepoPullRequestSummary: Sendable, Hashable {
+    public enum State: String, Sendable, Hashable, Codable {
+        case open
+        case closed
+    }
+
     public let number: Int
     public let title: String
     public let url: URL
     public let updatedAt: Date
+    public let createdAt: Date?
+    public let state: State
+    public let mergedAt: Date?
     public let authorLogin: String?
     public let authorAvatarURL: URL?
     public let isDraft: Bool
@@ -57,12 +74,18 @@ public struct RepoPullRequestSummary: Sendable, Hashable {
     public let labels: [RepoIssueLabel]
     public let headRefName: String?
     public let baseRefName: String?
+    public let bodyPreview: String?
+    public let requestedReviewerLogins: [String]
+    public let requestedTeamNames: [String]
 
     public init(
         number: Int,
         title: String,
         url: URL,
         updatedAt: Date,
+        createdAt: Date? = nil,
+        state: State = .open,
+        mergedAt: Date? = nil,
         authorLogin: String?,
         authorAvatarURL: URL?,
         isDraft: Bool,
@@ -70,12 +93,18 @@ public struct RepoPullRequestSummary: Sendable, Hashable {
         reviewCommentCount: Int,
         labels: [RepoIssueLabel],
         headRefName: String?,
-        baseRefName: String?
+        baseRefName: String?,
+        bodyPreview: String? = nil,
+        requestedReviewerLogins: [String] = [],
+        requestedTeamNames: [String] = []
     ) {
         self.number = number
         self.title = title
         self.url = url
         self.updatedAt = updatedAt
+        self.createdAt = createdAt
+        self.state = state
+        self.mergedAt = mergedAt
         self.authorLogin = authorLogin
         self.authorAvatarURL = authorAvatarURL
         self.isDraft = isDraft
@@ -84,6 +113,9 @@ public struct RepoPullRequestSummary: Sendable, Hashable {
         self.labels = labels
         self.headRefName = headRefName
         self.baseRefName = baseRefName
+        self.bodyPreview = bodyPreview
+        self.requestedReviewerLogins = requestedReviewerLogins
+        self.requestedTeamNames = requestedTeamNames
     }
 }
 

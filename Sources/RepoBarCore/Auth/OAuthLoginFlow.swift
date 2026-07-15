@@ -52,7 +52,7 @@ public struct OAuthLoginFlow {
         clientSecret: String,
         host: URL,
         loopbackPort: Int,
-        scope: String = "repo read:org",
+        scope: String? = nil,
         timeout: TimeInterval = 180
     ) async throws -> OAuthTokens {
         let normalizedHost = try Self.normalizeHost(host)
@@ -65,17 +65,22 @@ public struct OAuthLoginFlow {
 
         let server = self.makeLoopbackServer(loopbackPort)
         let redirectURL = try server.start()
+        defer { server.stop() }
 
         var components = URLComponents(url: authEndpoint, resolvingAgainstBaseURL: false)!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURL.absoluteString),
             URLQueryItem(name: "state", value: state),
-            URLQueryItem(name: "scope", value: scope),
             URLQueryItem(name: "code_challenge", value: pkce.challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
+        if let scope, scope.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            queryItems.append(URLQueryItem(name: "scope", value: scope))
+        }
+        components.queryItems = queryItems
         guard let authorizeURL = components.url else { throw URLError(.badURL) }
+
         try self.openURL(authorizeURL)
 
         let result = try await server.waitForCallback(timeout: timeout)
@@ -85,7 +90,7 @@ public struct OAuthLoginFlow {
         tokenRequest.httpMethod = "POST"
         tokenRequest.addValue("application/json", forHTTPHeaderField: "Accept")
         tokenRequest.addValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        tokenRequest.httpBody = Self.formUrlEncoded([
+        tokenRequest.httpBody = OAuthFormEncoder.encode([
             "client_id": clientID,
             "client_secret": clientSecret,
             "code": result.code,
@@ -96,6 +101,7 @@ public struct OAuthLoginFlow {
 
         let (data, response) = try await self.dataProvider(tokenRequest)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+
         let decoded = try JSONDecoder().decode(TokenResponse.self, from: data)
         let tokens = OAuthTokens(
             accessToken: decoded.accessToken,
@@ -104,7 +110,6 @@ public struct OAuthLoginFlow {
         )
         try self.tokenStore.save(tokens: tokens)
         try self.tokenStore.save(clientCredentials: OAuthClientCredentials(clientID: clientID, clientSecret: clientSecret))
-        server.stop()
         return tokens
     }
 
@@ -112,33 +117,25 @@ public struct OAuthLoginFlow {
         guard var components = URLComponents(url: host, resolvingAgainstBaseURL: false) else {
             throw GitHubAPIError.invalidHost
         }
+
         if components.scheme == nil { components.scheme = "https" }
         guard components.scheme?.lowercased() == "https", components.host != nil else {
             throw GitHubAPIError.invalidHost
         }
+
         components.path = ""
         components.query = nil
         components.fragment = nil
         guard let cleaned = components.url else { throw GitHubAPIError.invalidHost }
-        return cleaned
-    }
-}
 
-private extension OAuthLoginFlow {
-    static func formUrlEncoded(_ params: [String: String]) -> Data? {
-        let encoded = params.map { key, value in
-            let k = key.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? key
-            let v = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
-            return "\(k)=\(v)"
-        }.joined(separator: "&")
-        return encoded.data(using: .utf8)
+        return cleaned
     }
 }
 
 private struct TokenResponse: Decodable {
     let accessToken: String
     let tokenType: String
-    let scope: String
+    let scope: String?
     let expiresIn: Int?
     let refreshToken: String?
 

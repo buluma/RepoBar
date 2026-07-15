@@ -1,3 +1,4 @@
+import AppKit
 import RepoBarCore
 import SwiftUI
 
@@ -6,17 +7,40 @@ struct RepoSettingsView: View {
     let appState: AppState
     @State private var newRepoInput = ""
     @State private var newRepoVisibility: RepoVisibility = .pinned
+    @State private var searchQuery = ""
     @State private var selection = Set<String>()
+    @State private var allRows: [RepoBrowserRow] = []
+    @State private var filteredRows: [RepoBrowserRow] = []
+    @State private var statusLine = ""
+    @State private var sortOrder: [KeyPathComparator<RepoBrowserRow>] = [
+        KeyPathComparator(\RepoBrowserRow.visibilitySortKey, order: .forward),
+        KeyPathComparator(\RepoBrowserRow.fullName, order: .forward)
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Manage which repositories are pinned in the menubar and which are hidden.")
+            Text("Browse repositories RepoBar can access and choose what stays pinned or hidden.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            HStack(spacing: 8) {
+                TextField("Search repositories", text: self.$searchQuery)
+                    .textFieldStyle(.roundedBorder)
+
+                Button {
+                    self.searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear search")
+                .disabled(self.searchQuery.isEmpty)
+            }
+
             RepoInputRow(
                 placeholder: "owner/name",
-                buttonTitle: "Add",
+                buttonTitle: "Add Rule",
                 text: self.$newRepoInput,
                 onCommit: self.addNewRepo,
                 session: self.session,
@@ -31,44 +55,103 @@ struct RepoSettingsView: View {
                 .frame(width: 200)
             }
 
-            Table(self.rows, selection: self.$selection) {
-                TableColumn("Repository") { row in
-                    Text(row.name).lineLimit(1).truncationMode(.middle)
-                }
-                .width(min: 180, ideal: 240, max: .infinity)
+            Table(self.filteredRows, selection: self.$selection, sortOrder: self.$sortOrder) {
+                TableColumn("Repository", value: \RepoBrowserRow.fullName) { row in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.fullName)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
 
-                TableColumn("Visibility") { row in
-                    Picker("", selection: Binding(
-                        get: { row.visibility },
-                        set: { newValue in Task { await self.set(row.name, to: newValue) } }
-                    )) {
-                        ForEach(RepoVisibility.allCases) { vis in
-                            Text(vis.label).tag(vis)
+                        HStack(spacing: 6) {
+                            if row.isFork {
+                                Label("Fork", systemImage: "tuningfork")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            if row.isArchived {
+                                Label("Archived", systemImage: "archivebox")
+                                    .labelStyle(.titleAndIcon)
+                            }
+                            if row.isManual {
+                                Label("Manual", systemImage: "pencil")
+                                    .labelStyle(.titleAndIcon)
+                            }
                         }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                     }
-                    .labelsHidden()
-                    .frame(width: 140, alignment: .leading)
                 }
-                .width(min: 140, ideal: 160, max: 180)
+                .width(min: 300, ideal: 420, max: .infinity)
+
+                TableColumn("Issues", value: \RepoBrowserRow.sortableIssues) { row in
+                    Text(row.issueLabel)
+                        .monospacedDigit()
+                        .foregroundStyle(row.isManual ? .secondary : .primary)
+                }
+                .width(min: 56, ideal: 64, max: 76)
+
+                TableColumn("PRs", value: \RepoBrowserRow.sortablePulls) { row in
+                    Text(row.pullRequestLabel)
+                        .monospacedDigit()
+                        .foregroundStyle(row.isManual ? .secondary : .primary)
+                }
+                .width(min: 44, ideal: 52, max: 64)
+
+                TableColumn("Stars", value: \RepoBrowserRow.sortableStars) { row in
+                    Text(row.starLabel)
+                        .monospacedDigit()
+                        .foregroundStyle(row.isManual ? .secondary : .primary)
+                }
+                .width(min: 52, ideal: 64, max: 76)
+
+                TableColumn("Updated", value: \RepoBrowserRow.sortablePushedAt) { row in
+                    Text(row.updatedLabel)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+                .width(min: 80, ideal: 96, max: 120)
+
+                TableColumn("Visibility", value: \RepoBrowserRow.visibilitySortKey) { row in
+                    RepoVisibilityMenu(visibility: row.visibility) { newValue in
+                        Task { await self.set(row.fullName, to: newValue) }
+                    }
+                    .frame(width: 128, alignment: .leading)
+                }
+                .width(min: 128, ideal: 136, max: 144)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
-            .frame(minHeight: 240)
+            // Keep the surrounding controls visible when the window is clamped on a small
+            // display; the table consumes the remaining space and scrolls its own rows.
+            .frame(minHeight: 180, maxHeight: .infinity)
+            .layoutPriority(1)
             .onDeleteCommand { self.deleteSelection() }
             .contextMenu(forSelectionType: String.self) { selection in
+                Button("Open in GitHub") { self.openInGitHub(selection: selection) }
+                Divider()
                 Button("Pin") { Task { await self.bulkSet(selection, to: .pinned) } }
                 Button("Hide") { Task { await self.bulkSet(selection, to: .hidden) } }
                 Button("Set Visible") { Task { await self.bulkSet(selection, to: .visible) } }
+            } primaryAction: { selection in
+                self.openInGitHub(selection: selection)
             }
 
             HStack(spacing: 10) {
-                Button {
-                    self.deleteSelection()
-                } label: {
-                    Label("Remove", systemImage: "trash")
+                Text(self.statusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Button("Pin") {
+                    Task { await self.bulkSet(self.selection, to: .pinned) }
                 }
                 .disabled(self.selection.isEmpty)
 
-                Spacer()
+                Button {
+                    self.deleteSelection()
+                } label: {
+                    Label("Set Visible", systemImage: "eye")
+                }
+                .disabled(self.selection.isEmpty)
 
                 Button("Refresh Now") {
                     self.appState.requestRefresh(cancelInFlight: true)
@@ -77,27 +160,44 @@ struct RepoSettingsView: View {
         }
         .padding()
         .onAppear {
+            self.rebuildRows()
             Task { try? await self.appState.github.prefetchedRepositories() }
         }
+        .onChange(of: self.searchQuery) { _, _ in self.applySearch() }
+        .onChange(of: self.sortOrder) { _, _ in self.applySearch() }
+        .onChange(of: self.session.accessibleRepositories) { _, _ in self.rebuildRows() }
+        .onChange(of: self.session.repositories) { _, _ in self.rebuildRows() }
+        .onChange(of: self.session.menuSnapshot) { _, _ in self.rebuildRows() }
+        .onChange(of: self.session.settings.repoList.pinnedRepositories) { _, _ in self.rebuildRows() }
+        .onChange(of: self.session.settings.repoList.hiddenRepositories) { _, _ in self.rebuildRows() }
     }
 
-    private var rows: [RepoRow] {
-        var out: [RepoRow] = []
-        for (index, name) in self.session.settings.repoList.pinnedRepositories.enumerated() {
-            out.append(RepoRow(name: name, visibility: .pinned, sortKey: index))
+    private var browserRepositories: [Repository] {
+        if !self.session.accessibleRepositories.isEmpty {
+            return self.session.accessibleRepositories
         }
-        for name in self.session.settings.repoList.hiddenRepositories where !out.contains(where: { $0.name == name }) {
-            out.append(RepoRow(name: name, visibility: .hidden, sortKey: Int.max))
+        if let snapshotRepos = self.session.menuSnapshot?.repositories, !snapshotRepos.isEmpty {
+            return snapshotRepos
         }
-        return out.sorted { lhs, rhs in
-            if lhs.sortKey != rhs.sortKey { return lhs.sortKey < rhs.sortKey }
-            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        return self.session.repositories
+    }
+
+    private var webURLBuilder: RepoWebURLBuilder {
+        RepoWebURLBuilder(host: self.session.settings.githubHost)
+    }
+
+    private func openInGitHub(selection: Set<String>) {
+        for row in self.filteredRows where selection.contains(row.id) {
+            guard let url = self.webURLBuilder.repoURL(fullName: row.fullName) else { continue }
+
+            NSWorkspace.shared.open(url)
         }
     }
 
     private func addNewRepo(_ value: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
         self.newRepoInput = ""
         Task { await self.set(trimmed, to: self.newRepoVisibility) }
     }
@@ -107,8 +207,9 @@ struct RepoSettingsView: View {
     }
 
     private func bulkSet(_ ids: Set<String>, to visibility: RepoVisibility) async {
-        for id in ids {
-            await self.set(id, to: visibility)
+        let selectedRows = self.allRows.filter { ids.contains($0.id) }
+        for row in selectedRows {
+            await self.set(row.fullName, to: visibility)
         }
         await MainActor.run { self.selection.removeAll() }
     }
@@ -119,16 +220,69 @@ struct RepoSettingsView: View {
             await self.bulkSet(ids, to: .visible)
         }
     }
+
+    private func rebuildRows() {
+        self.allRows = RepoBrowserRows.make(
+            repositories: self.browserRepositories,
+            pinnedRepositories: self.session.settings.repoList.pinnedRepositories,
+            hiddenRepositories: self.session.settings.repoList.hiddenRepositories,
+            now: Date()
+        )
+        self.applySearch()
+    }
+
+    private func applySearch() {
+        var rows = RepoBrowserRows.filter(self.allRows, query: self.searchQuery)
+        if !self.sortOrder.isEmpty {
+            // Append a stable fullName tiebreaker so equal-count rows keep a
+            // predictable order even when a header click reduces sortOrder
+            // to a single comparator.
+            var effective = self.sortOrder
+            effective.append(KeyPathComparator(\RepoBrowserRow.fullName, order: .forward))
+            rows.sort(using: effective)
+        }
+        self.filteredRows = rows
+        self.selection.formIntersection(Set(self.filteredRows.map(\.id)))
+        self.statusLine = RepoBrowserRows.statusLine(allRows: self.allRows, filteredRows: self.filteredRows)
+    }
+}
+
+private struct RepoVisibilityMenu: View {
+    let visibility: RepoVisibility
+    var onChange: (RepoVisibility) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(RepoVisibility.allCases) { item in
+                Button {
+                    self.onChange(item)
+                } label: {
+                    if item == self.visibility {
+                        Label(item.label, systemImage: "checkmark")
+                    } else {
+                        Text(item.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(self.visibility.label)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 // MARK: - Autocomplete helper
-
-private struct RepoRow: Identifiable, Hashable {
-    var id: String { self.name }
-    let name: String
-    var visibility: RepoVisibility
-    let sortKey: Int
-}
 
 private struct RepoInputRow<Accessory: View>: View {
     let placeholder: String
@@ -182,7 +336,8 @@ private struct RepoInputRow<Accessory: View>: View {
                                 .onChange(of: geometry.size) { _, newSize in
                                     self.textFieldSize = newSize
                                 }
-                        })
+                        }
+                    )
                     .background(
                         RepoAutocompleteWindowView(
                             suggestions: self.suggestions,
@@ -223,6 +378,7 @@ private struct RepoInputRow<Accessory: View>: View {
     private func commit(_ value: String? = nil) {
         let trimmed = (value ?? self.trimmedText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
         self.text = ""
         self.suggestions = []
         self.showSuggestions = false
@@ -242,6 +398,7 @@ private struct RepoInputRow<Accessory: View>: View {
                 }
             }
             guard !Task.isCancelled else { return }
+
             await self.loadSuggestions(query: query)
         }
     }
@@ -271,6 +428,7 @@ private struct RepoInputRow<Accessory: View>: View {
         )
 
         guard !Task.isCancelled else { return }
+
         await MainActor.run {
             self.suggestions = repos
             if self.selectedIndex >= self.suggestions.count {
@@ -290,6 +448,7 @@ private struct RepoInputRow<Accessory: View>: View {
 
     private func handleMove(_ direction: MoveCommandDirection) {
         guard !self.suggestions.isEmpty else { return }
+
         switch direction {
         case .down:
             self.keyboardNavigating = true

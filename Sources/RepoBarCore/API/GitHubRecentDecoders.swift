@@ -9,6 +9,9 @@ enum GitHubRecentDecoders {
                 title: $0.title,
                 url: $0.htmlUrl,
                 updatedAt: $0.updatedAt,
+                createdAt: $0.createdAt,
+                state: $0.state ?? .open,
+                mergedAt: $0.mergedAt,
                 authorLogin: $0.user?.login,
                 authorAvatarURL: $0.user?.avatarUrl,
                 isDraft: $0.draft ?? false,
@@ -16,14 +19,35 @@ enum GitHubRecentDecoders {
                 reviewCommentCount: $0.reviewComments ?? 0,
                 labels: ($0.labels ?? []).map { RepoIssueLabel(name: $0.name, colorHex: $0.color) },
                 headRefName: $0.head?.refName,
-                baseRefName: $0.base?.refName
+                baseRefName: $0.base?.refName,
+                bodyPreview: Self.bodyPreview(from: $0.body),
+                requestedReviewerLogins: ($0.requestedReviewers ?? []).map(\.login),
+                requestedTeamNames: ($0.requestedTeams ?? []).map(\.name)
             )
         }
     }
 
     static func decodeRecentIssues(from data: Data) throws -> [RepoIssueSummary] {
         let responses = try GitHubDecoding.decode([IssueRecentResponse].self, from: data)
-        return responses
+        return self.issueSummaries(from: responses)
+    }
+
+    static func decodeRecentIssuePage(from data: Data) throws -> RecentIssuePage {
+        let responses = try GitHubDecoding.decode([IssueRecentResponse].self, from: data)
+        return RecentIssuePage(rawCount: responses.count, issues: self.issueSummaries(from: responses))
+    }
+
+    static func decodePullRequestIssueCommentCounts(from data: Data) throws -> [Int: Int] {
+        let responses = try GitHubDecoding.decode([IssueRecentResponse].self, from: data)
+        return Dictionary(
+            uniqueKeysWithValues: responses
+                .filter { $0.pullRequest != nil }
+                .map { ($0.number, $0.comments) }
+        )
+    }
+
+    private static func issueSummaries(from responses: [IssueRecentResponse]) -> [RepoIssueSummary] {
+        responses
             .filter { $0.pullRequest == nil }
             .map {
                 RepoIssueSummary(
@@ -31,6 +55,7 @@ enum GitHubRecentDecoders {
                     title: $0.title,
                     url: $0.htmlUrl,
                     updatedAt: $0.updatedAt,
+                    createdAt: $0.createdAt,
                     authorLogin: $0.user?.login,
                     authorAvatarURL: $0.user?.avatarUrl,
                     assigneeLogins: ($0.assignees ?? []).compactMap(\.login),
@@ -38,6 +63,11 @@ enum GitHubRecentDecoders {
                     labels: $0.labels.map { RepoIssueLabel(name: $0.name, colorHex: $0.color) }
                 )
             }
+    }
+
+    struct RecentIssuePage {
+        let rawCount: Int
+        let issues: [RepoIssueSummary]
     }
 
     static func decodeRecentReleases(from data: Data) throws -> [RepoReleaseSummary] {
@@ -54,6 +84,7 @@ enum GitHubRecentDecoders {
                     else {
                         return nil
                     }
+
                     return RepoReleaseAssetSummary(
                         name: name,
                         sizeBytes: asset.size,
@@ -81,6 +112,7 @@ enum GitHubRecentDecoders {
         let response = try GitHubDecoding.decode(ActionsRunsResponse.self, from: data)
         return response.workflowRuns.compactMap { run in
             guard let url = run.htmlUrl else { return nil }
+
             let title = self.workflowRunTitle(run)
             let updatedAt = run.updatedAt ?? run.createdAt ?? Date.distantPast
             return RepoWorkflowRunSummary(
@@ -131,6 +163,7 @@ enum GitHubRecentDecoders {
         let responses = try GitHubDecoding.decode([CommitRecentResponse].self, from: data)
         return responses.compactMap { response in
             guard let url = response.htmlUrl else { return nil }
+
             let message = response.commit.message.trimmingCharacters(in: .whitespacesAndNewlines)
             let title = message.split(whereSeparator: \.isNewline).first.map(String.init) ?? message
             return RepoCommitSummary(
@@ -149,6 +182,7 @@ enum GitHubRecentDecoders {
         let responses = try GitHubDecoding.decode([ContributorResponse].self, from: data)
         return responses.compactMap {
             guard let login = $0.login else { return nil }
+
             return RepoContributorSummary(
                 login: login,
                 avatarURL: $0.avatarUrl,
@@ -170,6 +204,9 @@ enum GitHubRecentDecoders {
         let title: String
         let htmlUrl: URL
         let updatedAt: Date
+        let createdAt: Date?
+        let state: RepoPullRequestSummary.State?
+        let mergedAt: Date?
         let user: RecentUser?
         let draft: Bool?
         let comments: Int?
@@ -177,13 +214,39 @@ enum GitHubRecentDecoders {
         let labels: [IssueLabel]?
         let head: PullRequestRef?
         let base: PullRequestRef?
+        let body: String?
+        let requestedReviewers: [RecentUser]?
+        let requestedTeams: [RequestedTeam]?
 
         enum CodingKeys: String, CodingKey {
-            case number, title, user, draft, comments, labels, head, base
+            case number, title, state, user, draft, comments, labels, head, base, body
             case htmlUrl = "html_url"
             case updatedAt = "updated_at"
+            case createdAt = "created_at"
+            case mergedAt = "merged_at"
             case reviewComments = "review_comments"
+            case requestedReviewers = "requested_reviewers"
+            case requestedTeams = "requested_teams"
         }
+    }
+
+    private static func bodyPreview(from body: String?) -> String? {
+        guard let body else { return nil }
+
+        let collapsed = body
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+        guard collapsed.isEmpty == false else { return nil }
+
+        if collapsed.count <= 240 { return collapsed }
+        return "\(collapsed.prefix(237))..."
+    }
+
+    private struct RequestedTeam: Decodable {
+        let name: String
     }
 
     private struct PullRequestRef: Decodable {
@@ -199,6 +262,7 @@ enum GitHubRecentDecoders {
         let title: String
         let htmlUrl: URL
         let updatedAt: Date
+        let createdAt: Date?
         let comments: Int
         let user: RecentUser?
         let labels: [IssueLabel]
@@ -209,6 +273,7 @@ enum GitHubRecentDecoders {
             case number, title, user, comments, labels, assignees
             case htmlUrl = "html_url"
             case updatedAt = "updated_at"
+            case createdAt = "created_at"
             case pullRequest = "pull_request"
         }
     }

@@ -4,7 +4,7 @@ import Testing
 
 struct RepositorySortTests {
     @Test
-    func sortedByIssuesFallsBackToActivity() {
+    func `sorted by issues falls back to activity`() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let newer = now.addingTimeInterval(-60)
         let older = now.addingTimeInterval(-3600)
@@ -17,7 +17,7 @@ struct RepositorySortTests {
     }
 
     @Test
-    func sortedByNameIsCaseInsensitive() {
+    func `sorted by name is case insensitive`() {
         let repoA = Self.repo(owner: "a", name: "Repo", issues: 0, pulls: 0, stars: 0, pushedAt: nil)
         let repoB = Self.repo(owner: "B", name: "repo", issues: 0, pulls: 0, stars: 0, pushedAt: nil)
 
@@ -26,8 +26,8 @@ struct RepositorySortTests {
     }
 
     @Test
-    func sortedByEventUsesActivityLineWithPushFallback() {
-        let withActivity = Self.repo(
+    func `sorted by event uses activity line with push fallback`() throws {
+        let withActivity = try Self.repo(
             name: "A",
             issues: 0,
             pulls: 0,
@@ -37,7 +37,7 @@ struct RepositorySortTests {
                 title: "Fix",
                 actor: "alice",
                 date: Date(timeIntervalSinceReferenceDate: 10),
-                url: URL(string: "https://example.com")!
+                url: #require(URL(string: "https://example.com"))
             )
         )
         let withPushFallback = Self.repo(name: "B", issues: 0, pulls: 0, stars: 0, pushedAt: Date(), activity: nil)
@@ -47,12 +47,12 @@ struct RepositorySortTests {
     }
 
     @Test
-    func activityDatePicksMostRecentOfActivityAndPush() {
+    func `activity date picks most recent of activity and push`() throws {
         let now = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let pushedAt = now.addingTimeInterval(-100)
         let activityAt = now.addingTimeInterval(-10)
 
-        let repo = Self.repo(
+        let repo = try Self.repo(
             name: "Repo",
             issues: 0,
             pulls: 0,
@@ -62,14 +62,14 @@ struct RepositorySortTests {
                 title: "PR",
                 actor: "bob",
                 date: activityAt,
-                url: URL(string: "https://example.com")!
+                url: #require(URL(string: "https://example.com"))
             )
         )
         #expect(repo.activityDate == activityAt)
     }
 
     @Test
-    func activityLineFallsBackToPush() {
+    func `activity line falls back to push`() {
         let repo = Self.repo(name: "Repo", issues: 0, pulls: 0, stars: 0, pushedAt: Date(), activity: nil)
         #expect(repo.activityLine(fallbackToPush: true) == "push")
         #expect(repo.activityLine(fallbackToPush: false) == nil)

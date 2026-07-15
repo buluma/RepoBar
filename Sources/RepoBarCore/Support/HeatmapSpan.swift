@@ -15,7 +15,9 @@ public enum HeatmapSpan: Int, CaseIterable, Equatable, Codable {
         }
     }
 
-    public var months: Int { self.rawValue }
+    public var months: Int {
+        self.rawValue
+    }
 }
 
 public struct HeatmapRange: Equatable, Codable, Sendable {
@@ -64,6 +66,7 @@ public enum HeatmapFilter {
             let start = calendar.date(byAdding: .month, value: -span.months, to: end) ?? end
             return HeatmapRange(start: start, end: end)
         }
+
         return self.alignedRange(span: span, now: now, calendar: calendar)
     }
 

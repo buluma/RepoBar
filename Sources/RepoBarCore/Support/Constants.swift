@@ -14,6 +14,7 @@ public enum LocalProjectsConstants {
     // below the configured root path.
     public static let defaultMaxDepth: Int = 4
     public static let defaultSnapshotConcurrencyLimit: Int = 8
+    public static let gitCommandTimeout: TimeInterval = 8
     public static let dirtyFileLimit: Int = 10
 }
 
@@ -22,7 +23,7 @@ public enum RepoDetailCacheConstants {
     public static let ciTTL: TimeInterval = 60 * 60
     public static let activityTTL: TimeInterval = 60 * 60
     public static let trafficTTL: TimeInterval = 60 * 60
-    public static let heatmapTTL: TimeInterval = 60 * 60
+    public static let heatmapTTL: TimeInterval = 24 * 60 * 60
     public static let releaseTTL: TimeInterval = 60 * 60
     public static let discussionsCapabilityTTL: TimeInterval = 24 * 60 * 60
 }

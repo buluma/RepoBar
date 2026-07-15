@@ -14,8 +14,11 @@ public enum MainMenuItemID: String, CaseIterable, Codable, Hashable, Sendable {
     case signInAction
     case contributionHeader
     case statusBanner
+    case rateLimits
+    case actionsLimits
     case filters
     case repoList
+    case issueNavigator
     case preferences
     case about
     case restartToUpdate
@@ -27,8 +30,11 @@ public enum MainMenuItemID: String, CaseIterable, Codable, Hashable, Sendable {
         case .signInAction: "Sign In"
         case .contributionHeader: "Contribution Header"
         case .statusBanner: "Status Banner"
+        case .rateLimits: "GitHub API Status"
+        case .actionsLimits: "Actions & Runners"
         case .filters: "Menu Filters"
         case .repoList: "Repository Cards"
+        case .issueNavigator: "Issue Navigator"
         case .preferences: "Preferences"
         case .about: "About RepoBar"
         case .restartToUpdate: "Restart to Update"
@@ -42,8 +48,11 @@ public enum MainMenuItemID: String, CaseIterable, Codable, Hashable, Sendable {
         case .signInAction: "GitHub sign-in action"
         case .contributionHeader: "Heatmap header + submenu"
         case .statusBanner: "Rate-limit or error banner"
+        case .rateLimits: "Current blocker and rate-limit diagnostics"
+        case .actionsLimits: "Runner status, queue depth, and usage"
         case .filters: "Pinned/hidden filter chips"
         case .repoList: "Repo cards + inline heatmap"
+        case .issueNavigator: "Fast issue and pull request search"
         case .preferences: nil
         case .about: nil
         case .restartToUpdate: "Shown when an update is ready"
@@ -55,10 +64,10 @@ public enum MainMenuItemID: String, CaseIterable, Codable, Hashable, Sendable {
         switch self {
         case .loggedOutPrompt, .signInAction: .auth
         case .contributionHeader: .header
-        case .statusBanner: .status
+        case .statusBanner, .rateLimits, .actionsLimits: .status
         case .filters: .filters
         case .repoList: .repos
-        case .preferences, .about, .restartToUpdate, .quit: .footer
+        case .issueNavigator, .preferences, .about, .restartToUpdate, .quit: .footer
         }
     }
 }
@@ -166,7 +175,7 @@ public enum RepoSubmenuItemID: String, CaseIterable, Codable, Hashable, Sendable
 }
 
 public struct MenuCustomization: Equatable, Codable, Hashable, Sendable {
-    public var hiddenMainMenuItems: Set<MainMenuItemID> = []
+    public var hiddenMainMenuItems: Set<MainMenuItemID> = [.actionsLimits]
     public var mainMenuOrder: [MainMenuItemID] = Self.defaultMainMenuOrder
     public var hiddenRepoSubmenuItems: Set<RepoSubmenuItemID> = []
     public var repoSubmenuOrder: [RepoSubmenuItemID] = Self.defaultRepoSubmenuOrder
@@ -176,6 +185,8 @@ public struct MenuCustomization: Equatable, Codable, Hashable, Sendable {
     public mutating func normalize() {
         let originalRepoOrder = self.repoSubmenuOrder
         self.mainMenuOrder = Self.normalizedOrder(self.mainMenuOrder, defaults: Self.defaultMainMenuOrder)
+        Self.moveMainMenuItem(.rateLimits, after: .statusBanner, in: &self.mainMenuOrder)
+        Self.moveMainMenuItem(.actionsLimits, after: .rateLimits, in: &self.mainMenuOrder)
         self.repoSubmenuOrder = Self.normalizedOrder(self.repoSubmenuOrder, defaults: Self.defaultRepoSubmenuOrder)
         if originalRepoOrder.contains(.changelog) == false {
             self.repoSubmenuOrder.removeAll { $0 == .changelog }
@@ -204,8 +215,11 @@ public struct MenuCustomization: Equatable, Codable, Hashable, Sendable {
         .signInAction,
         .contributionHeader,
         .statusBanner,
+        .rateLimits,
+        .actionsLimits,
         .filters,
         .repoList,
+        .issueNavigator,
         .preferences,
         .about,
         .restartToUpdate,
@@ -223,7 +237,6 @@ public struct MenuCustomization: Equatable, Codable, Hashable, Sendable {
         .issues,
         .pulls,
         .releases,
-        .changelog,
         .ciRuns,
         .discussions,
         .tags,
@@ -248,8 +261,23 @@ public struct MenuCustomization: Equatable, Codable, Hashable, Sendable {
         }
         return result
     }
+
+    private static func moveMainMenuItem(
+        _ item: MainMenuItemID,
+        after anchor: MainMenuItemID,
+        in order: inout [MainMenuItemID]
+    ) {
+        guard let itemIndex = order.firstIndex(of: item),
+              let anchorIndex = order.firstIndex(of: anchor) else { return }
+
+        order.remove(at: itemIndex)
+        let adjustedAnchorIndex = itemIndex < anchorIndex ? anchorIndex - 1 : anchorIndex
+        order.insert(item, at: min(adjustedAnchorIndex + 1, order.count))
+    }
 }
 
 public extension MainMenuItemID {
-    var isRequired: Bool { MenuCustomization.requiredMainMenuItems.contains(self) }
+    var isRequired: Bool {
+        MenuCustomization.requiredMainMenuItems.contains(self)
+    }
 }
